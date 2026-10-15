@@ -453,7 +453,7 @@ fn create_window<R: Runtime>(app: &AppHandle<R>, template: &str, args: Option<Va
         _ => String::new(),
     };
     let url = WebviewUrl::App(format!("{page}{query}").into());
-    let title = if label == "main" && app.config().identifier == "io.bsmanager.bsmanager.preview" {
+    let title = if app.config().identifier == "io.bsmanager.bsmanager.preview" {
         "BSManager Preview"
     } else {
         "BSManager"
@@ -1038,7 +1038,7 @@ async fn handle_request<R: Runtime>(
                 .get(&label).cloned().unwrap_or_else(|| json!({}));
             Ok(args)
         }
-        _ => Err(serialized_error(format!("This Windows Tauri preview does not implement '{channel}' yet"), "NOT_IMPLEMENTED")),
+        _ => Err(serialized_error(format!("This Windows Tauri app does not implement '{channel}'"), "NOT_IMPLEMENTED")),
     }
 }
 
