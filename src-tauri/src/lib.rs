@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fs, path::{Path, PathBuf}, sync::Mutex};
+use std::{collections::HashMap, fs, path::{Path, PathBuf}, sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}}};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use serde::{Deserialize, Serialize};
@@ -22,6 +22,7 @@ const PREVIEW_IMPORT_MARKER: &str = "preview-legacy-settings-import";
 struct AppState {
     window_arguments: Mutex<HashMap<String, Value>>,
     library_operation: tokio::sync::Mutex<()>,
+    active_requests: Mutex<HashMap<String, Arc<AtomicBool>>>,
 }
 
 #[derive(Clone, Serialize)]
@@ -213,11 +214,13 @@ fn unwrap_request(value: &Value) -> IpcRequest {
     serde_json::from_value(value.clone()).unwrap_or(IpcRequest { args: value.clone(), responce_channel: None })
 }
 
-fn ipc_response<R: Runtime>(window: &WebviewWindow<R>, channel: &str, request: &IpcRequest, result: Result<Value, SerializedError>) {
+fn ipc_response<R: Runtime>(window: &WebviewWindow<R>, channel: &str, request: &IpcRequest, result: Result<Value, SerializedError>, streamed: bool) {
     let Some(response_channel) = &request.responce_channel else { return };
     match result {
         Ok(value) => {
-            let _ = window.emit(response_channel, value);
+            if !streamed {
+                let _ = window.emit(response_channel, value);
+            }
             let complete_channel = format!("{response_channel}_complete");
             let _ = window.emit(&complete_channel, ());
         }
@@ -316,8 +319,20 @@ async fn save_file<R: Runtime>(app: &AppHandle<R>, window: &WebviewWindow<R>, ar
     Ok(json!(path))
 }
 
-async fn handle_request<R: Runtime>(app: &AppHandle<R>, window: &WebviewWindow<R>, channel: &str, args: Value) -> Result<Value, SerializedError> {
+async fn handle_request<R: Runtime>(
+    app: &AppHandle<R>,
+    window: &WebviewWindow<R>,
+    channel: &str,
+    args: Value,
+    response_channel: Option<&str>,
+    cancelled: Arc<AtomicBool>,
+) -> Result<Value, SerializedError> {
     match channel {
+        "import-version" => {
+            let app_state = app.state::<AppState>();
+            let _operation = app_state.library_operation.lock().await;
+            versions::import_version(app, window, &args, response_channel, cancelled).await
+        }
         "current-version" => Ok(json!(env!("CARGO_PKG_VERSION"))),
         "get-available-update" => Ok(Value::Null),
         "check-update" => Ok(json!(false)),
@@ -539,17 +554,45 @@ async fn handle_request<R: Runtime>(app: &AppHandle<R>, window: &WebviewWindow<R
 
 #[tauri::command]
 async fn ipc_send<R: Runtime>(app: AppHandle<R>, window: WebviewWindow<R>, channel: String, args: Option<Value>) {
-    if channel.ends_with("_teardown") { return; }
+    if let Some(response_id) = channel.strip_suffix("_teardown") {
+        let state = app.state::<AppState>();
+        if let Ok(mut requests) = state.active_requests.lock() {
+            if let Some(cancelled) = requests.remove(response_id) {
+                cancelled.store(true, Ordering::Relaxed);
+            }
+        }
+        return;
+    }
     let request = unwrap_request(&args.unwrap_or(Value::Null));
     let has_response = request.responce_channel.is_some();
     let request_args = request.args.clone();
-    let result = handle_request(&app, &window, &channel, request_args).await;
+    let cancelled = Arc::new(AtomicBool::new(false));
+    if let Some(response_id) = &request.responce_channel {
+        let state = app.state::<AppState>();
+        if let Ok(mut requests) = state.active_requests.lock() {
+            requests.insert(response_id.clone(), cancelled.clone());
+        }
+    }
+    let result = handle_request(
+        &app,
+        &window,
+        &channel,
+        request_args,
+        request.responce_channel.as_deref(),
+        cancelled,
+    ).await;
+    if let Some(response_id) = &request.responce_channel {
+        let state = app.state::<AppState>();
+        if let Ok(mut requests) = state.active_requests.lock() {
+            requests.remove(response_id);
+        }
+    }
     if !has_response {
         if let Err(error) = result {
             log::warn!("Windows Tauri one-way route '{channel}' failed: {}", error.message);
         }
     } else {
-        ipc_response(&window, &channel, &request, result);
+        ipc_response(&window, &channel, &request, result, channel == "import-version");
     }
 }
 

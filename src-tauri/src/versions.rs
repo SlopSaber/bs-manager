@@ -1,7 +1,8 @@
-use std::{fs, io, path::{Component, Path, PathBuf}};
+use std::{collections::HashSet, fs, io, path::{Component, Path, PathBuf}, sync::{Arc, atomic::{AtomicBool, Ordering}}};
 
 use serde_json::{Map, Value, json};
-use tauri::{AppHandle, Runtime};
+use tauri::{AppHandle, Emitter, Runtime, WebviewWindow};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use uuid::Uuid;
 
 use crate::{library, SerializedError, serialized_error};
@@ -10,6 +11,217 @@ const INSTANCES_FOLDER: &str = "BSInstances";
 const LIBRARY_CONFIG_FILE: &str = "config.cfg";
 const VERSION_METADATA_FILE: &str = "metadata.config";
 const CUSTOM_VERSIONS_KEY: &str = "custom-versions";
+
+struct ImportFile {
+    source: PathBuf,
+    destination: PathBuf,
+    size: u64,
+}
+
+pub async fn import_version<R: Runtime>(
+    app: &AppHandle<R>,
+    window: &WebviewWindow<R>,
+    args: &Value,
+    response_channel: Option<&str>,
+    cancelled: Arc<AtomicBool>,
+) -> Result<Value, SerializedError> {
+    let source = args.get("fromPath").and_then(Value::as_str).filter(|path| !path.trim().is_empty())
+        .ok_or_else(|| serialized_error("Source folder is required", "INVALID_SOURCE"))?;
+    let store = args.get("store").and_then(Value::as_str)
+        .filter(|store| matches!(*store, "steam" | "oculus"))
+        .ok_or_else(|| serialized_error("Store must be steam or oculus", "INVALID_STORE"))?;
+    let source = super::library::canonicalize_existing_directory(Path::new(source))
+        .map_err(|error| serialized_error(error, "INVALID_SOURCE"))?;
+    let mut version = identify_version(&source)?;
+    let base_path = version_path(app, &version)?;
+    let mut destination = base_path.clone();
+    let mut suffix = 0;
+    while path_exists(&destination) {
+        suffix += 1;
+        destination = PathBuf::from(format!("{} ({suffix})", base_path.display()));
+    }
+    if destination != base_path {
+        if let Some(object) = version.as_object_mut() {
+            let name = destination.file_name().and_then(|name| name.to_str())
+                .ok_or_else(|| serialized_error("Imported folder name is invalid", "INVALID_VERSION"))?;
+            object.insert("name".into(), json!(name));
+        }
+    }
+
+    if let Some(object) = version.as_object_mut() {
+        object.insert("path".into(), json!(destination));
+        object.insert("steam".into(), json!(false));
+        object.insert("oculus".into(), json!(false));
+        object.insert("metadata".into(), json!({ "id": "", "store": store }));
+    }
+
+    let source_for_scan = source.clone();
+    let destination_for_scan = destination.clone();
+    let cancellation_for_scan = cancelled.clone();
+    let (files, directories, total) = tokio::task::spawn_blocking(move || {
+        collect_import_files(&source_for_scan, &destination_for_scan, &cancellation_for_scan)
+    }).await
+        .map_err(|error| serialized_error(format!("Import scan worker failed: {error}"), "IMPORT_FAILED"))?
+        .map_err(|error| {
+            let code = if error.kind() == io::ErrorKind::Interrupted { "REQUEST_CANCELLED" } else { "IMPORT_FAILED" };
+            serialized_error(error.to_string(), code)
+        })?;
+
+    let copy_result = async {
+        emit_import_progress(window, response_channel, 0, total, &version)?;
+        for directory in directories {
+            tokio::fs::create_dir_all(directory).await
+                .map_err(|error| serialized_error(error.to_string(), "IMPORT_FAILED"))?;
+        }
+        let mut current = 0_u64;
+        for file in files {
+            if cancelled.load(Ordering::Relaxed) {
+                return Err(serialized_error("Import was cancelled", "REQUEST_CANCELLED"));
+            }
+            if let Some(parent) = file.destination.parent() {
+                tokio::fs::create_dir_all(parent).await
+                    .map_err(|error| serialized_error(error.to_string(), "IMPORT_FAILED"))?;
+            }
+            let mut input = tokio::fs::File::open(&file.source).await
+                .map_err(|error| serialized_error(error.to_string(), "IMPORT_FAILED"))?;
+            let mut output = tokio::fs::File::create(&file.destination).await
+                .map_err(|error| serialized_error(error.to_string(), "IMPORT_FAILED"))?;
+            let mut buffer = vec![0_u8; 2 * 1024 * 1024];
+            loop {
+                if cancelled.load(Ordering::Relaxed) {
+                    return Err(serialized_error("Import was cancelled", "REQUEST_CANCELLED"));
+                }
+                let read = input.read(&mut buffer).await
+                    .map_err(|error| serialized_error(error.to_string(), "IMPORT_FAILED"))?;
+                if read == 0 {
+                    break;
+                }
+                output.write_all(&buffer[..read]).await
+                    .map_err(|error| serialized_error(error.to_string(), "IMPORT_FAILED"))?;
+                current = current.saturating_add(read as u64).min(total);
+                emit_import_progress(window, response_channel, current, total, &version)?;
+            }
+            if file.size == 0 {
+                emit_import_progress(window, response_channel, current, total, &version)?;
+            }
+        }
+        if cancelled.load(Ordering::Relaxed) {
+            return Err(serialized_error("Import was cancelled", "REQUEST_CANCELLED"));
+        }
+        Ok::<u64, SerializedError>(current)
+    }.await;
+    let current = match copy_result {
+        Ok(current) => current,
+        Err(error) => {
+            cleanup_import(&destination).await;
+            return Err(error);
+        }
+    };
+
+    let metadata = json!({ "id": Uuid::new_v4().to_string(), "store": store });
+    let metadata_path = destination.join(VERSION_METADATA_FILE);
+    if let Err(error) = tokio::fs::write(&metadata_path, serde_json::to_vec_pretty(&metadata).unwrap_or_default()).await {
+        log::warn!("Unable to save imported version metadata {}: {error}", metadata_path.display());
+    }
+    if let Some(object) = version.as_object_mut() {
+        object.insert("metadata".into(), metadata);
+    }
+    emit_import_progress(window, response_channel, current.max(total), total, &version)?;
+    Ok(Value::Null)
+}
+
+fn identify_version(source: &Path) -> Result<Value, SerializedError> {
+    if !source.join("Beat Saber.exe").is_file() {
+        return Err(serialized_error("Selected folder is not a Beat Saber installation", "NOT_BS_FOLDER"));
+    }
+    let version_text_path = source.join("Beat Saber_Data").join("globalgamemanagers");
+    let version_text = fs::read(&version_text_path)
+        .map_err(|error| serialized_error(error.to_string(), "NOT_BS_FOLDER"))?;
+    let version_text = String::from_utf8_lossy(&version_text);
+    let catalog = serde_json::from_str::<Vec<Value>>(super::VERSION_LIBRARY)
+        .map_err(|error| serialized_error(error.to_string(), "VERSION_LIBRARY_READ_FAILED"))?;
+    let mut version = catalog.iter().rev().find(|candidate| {
+        candidate.get("BSVersion").and_then(Value::as_str).is_some_and(|value| version_text.contains(value))
+    }).cloned().ok_or_else(|| serialized_error("Unable to detect Beat Saber version", "NOT_BS_FOLDER"))?;
+    let object = version.as_object_mut().ok_or_else(|| serialized_error("Version catalog entry is invalid", "VERSION_LIBRARY_READ_FAILED"))?;
+    let folder_name = source.file_name().and_then(|name| name.to_str()).unwrap_or_default();
+    let game_version = object.get("BSVersion").and_then(Value::as_str).unwrap_or_default();
+    if folder_name != game_version {
+        object.insert("name".into(), json!(folder_name));
+    }
+    object.insert("path".into(), json!(source));
+    object.insert("steam".into(), json!(false));
+    object.insert("oculus".into(), json!(false));
+    Ok(version)
+}
+
+fn collect_import_files(source: &Path, destination: &Path, cancelled: &AtomicBool) -> io::Result<(Vec<ImportFile>, Vec<PathBuf>, u64)> {
+    let mut files = Vec::new();
+    let mut directories = Vec::new();
+    let mut total = 0_u64;
+    let mut ancestors = HashSet::new();
+    collect_import_entry(source, destination, cancelled, &mut ancestors, &mut files, &mut directories, &mut total)?;
+    Ok((files, directories, total))
+}
+
+fn collect_import_entry(
+    source: &Path,
+    destination: &Path,
+    cancelled: &AtomicBool,
+    ancestors: &mut HashSet<PathBuf>,
+    files: &mut Vec<ImportFile>,
+    directories: &mut Vec<PathBuf>,
+    total: &mut u64,
+) -> io::Result<()> {
+    if cancelled.load(Ordering::Relaxed) {
+        return Err(io::Error::new(io::ErrorKind::Interrupted, "Import was cancelled"));
+    }
+    let metadata = fs::metadata(source)?;
+    if metadata.is_dir() {
+        let identity = fs::canonicalize(source)?;
+        if !ancestors.insert(identity.clone()) {
+            return Ok(());
+        }
+        directories.push(destination.to_path_buf());
+        for entry in fs::read_dir(source)? {
+            let entry = entry?;
+            collect_import_entry(
+                &entry.path(),
+                &destination.join(entry.file_name()),
+                cancelled,
+                ancestors,
+                files,
+                directories,
+                total,
+            )?;
+        }
+        ancestors.remove(&identity);
+    } else if metadata.is_file() {
+        let size = metadata.len();
+        *total = total.saturating_add(size);
+        files.push(ImportFile { source: source.to_path_buf(), destination: destination.to_path_buf(), size });
+    }
+    Ok(())
+}
+
+fn emit_import_progress<R: Runtime>(
+    window: &WebviewWindow<R>,
+    response_channel: Option<&str>,
+    current: u64,
+    total: u64,
+    version: &Value,
+) -> Result<(), SerializedError> {
+    if let Some(channel) = response_channel {
+        window.emit(channel, json!({ "current": current, "total": total, "data": version }))
+            .map_err(|error| serialized_error(error.to_string(), "IPC_EMIT_FAILED"))?;
+    }
+    Ok(())
+}
+
+async fn cleanup_import(path: &Path) {
+    let path = path.to_path_buf();
+    let _ = tokio::task::spawn_blocking(move || super::library::remove_library(&path)).await;
+}
 
 pub fn get_installed_versions<R: Runtime>(app: &AppHandle<R>) -> Result<Value, SerializedError> {
     let library_root = super::install_directory(app)
