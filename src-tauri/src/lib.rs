@@ -187,6 +187,11 @@ fn resolve_window(template: &str) -> Option<(&'static str, &'static str, f64, f6
 fn create_window<R: Runtime>(app: &AppHandle<R>, template: &str, args: Option<Value>) -> Result<(), String> {
     let (label, page, width, height, min_width, min_height, resizable) = resolve_window(template)
         .ok_or_else(|| format!("Unsupported application window: {template}"))?;
+    if let Some(args) = args.as_ref() {
+        let state = app.state::<AppState>();
+        state.window_arguments.lock().map_err(|_| "Window state is unavailable".to_owned())?
+            .insert(label.to_owned(), args.clone());
+    }
     if let Some(window) = app.get_webview_window(label) {
         window.show().map_err(|error| error.to_string())?;
         window.set_focus().map_err(|error| error.to_string())?;
@@ -384,6 +389,7 @@ async fn handle_request<R: Runtime>(
         "is-oculus-sideloaded-apps-enabled" => windows_integration::sideloaded_apps_enabled(),
         "enable-oculus-sideloaded-apps" => windows_integration::enable_sideloaded_apps(app).await,
         "vr-runtime.get-active" => Ok(windows_integration::active_vr_runtime(args.as_str())),
+        "shortcut-launch-options" => shortcut_launch_options(app, window),
         "current-version" => Ok(json!(env!("CARGO_PKG_VERSION"))),
         "get-available-update" => Ok(Value::Null),
         "check-update" => Ok(json!(false)),
@@ -687,15 +693,125 @@ fn is_application_window(label: &str) -> bool {
 fn handle_launch_argument<R: Runtime>(app: &AppHandle<R>, argument: &str) {
     if let Ok(url) = url::Url::parse(argument) {
         if ["bsmanager", "beatsaver", "web+bsmap", "bsplaylist", "modelsaber"].contains(&url.scheme()) {
-            let _ = app.emit("app-url", argument.to_owned());
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.show();
-                let _ = window.set_focus();
+            let mut args = Map::new();
+            let template = match url.scheme() {
+                "bsmanager" if url.host_str() == Some("launch") => {
+                    for (key, value) in url.query_pairs() {
+                        args.insert(key.into_owned(), Value::String(value.into_owned()));
+                    }
+                    Some("shortcut-launch.html")
+                }
+                "beatsaver" if !url.host_str().unwrap_or_default().is_empty() => {
+                    args.insert("mapId".into(), json!(url.host_str().unwrap_or_default()));
+                    args.insert("isHash".into(), json!("false"));
+                    Some("oneclick-download-map.html")
+                }
+                "web+bsmap" if !url.host_str().unwrap_or_default().is_empty() => {
+                    args.insert("mapId".into(), json!(url.host_str().unwrap_or_default()));
+                    args.insert("isHash".into(), json!("true"));
+                    Some("oneclick-download-map.html")
+                }
+                "bsplaylist" if url.host_str() == Some("playlist") => {
+                    let playlist = format!("{}{}", url.path().trim_start_matches('/'), url.query().map(|query| format!("?{query}")).unwrap_or_default());
+                    args.insert("playlistUrl".into(), json!(playlist));
+                    Some("oneclick-download-playlist.html")
+                }
+                "modelsaber" => {
+                    let model_id = url.path().trim_start_matches('/').split('/').next().unwrap_or_default();
+                    if model_id.is_empty() { None } else {
+                        args.insert("modelId".into(), json!(model_id));
+                        Some("oneclick-download-model.html")
+                    }
+                }
+                _ => None,
+            };
+            if let Some(template) = template {
+                if let Err(error) = create_window(app, template, Some(Value::Object(args))) {
+                    log::warn!("Could not open deep-link window: {error}");
+                }
+            } else {
+                let _ = app.emit("app-url", argument.to_owned());
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
             }
         }
     } else if Path::new(argument).extension().is_some_and(|extension| extension.eq_ignore_ascii_case("bplist")) {
-        let _ = app.emit("app-file", argument.to_owned());
+        let args = json!({ "playlistUrl": argument });
+        if let Err(error) = create_window(app, "oneclick-download-playlist.html", Some(args)) {
+            log::warn!("Could not open playlist file: {error}");
+        }
     }
+}
+
+fn shortcut_launch_options<R: Runtime>(
+    app: &AppHandle<R>,
+    window: &WebviewWindow<R>,
+) -> Result<Value, SerializedError> {
+    if window.label() != "shortcut-launch" {
+        return Err(serialized_error("Shortcut launch options are only available in the shortcut window", "WINDOW_NOT_ALLOWED"));
+    }
+    let state = app.state::<AppState>();
+    let args = state.window_arguments.lock()
+        .map_err(|_| serialized_error("Window state is unavailable", "WINDOW_FAILED"))?
+        .get("shortcut-launch").cloned().unwrap_or_else(|| json!({}));
+    let version_id = args.get("version").and_then(Value::as_str).filter(|value| !value.is_empty())
+        .ok_or_else(|| serialized_error("Shortcut does not include a Beat Saber version", "INVALID_VERSION"))?;
+    let catalog = serde_json::from_str::<Vec<Value>>(VERSION_LIBRARY)
+        .map_err(|error| serialized_error(error.to_string(), "VERSION_LIBRARY_READ_FAILED"))?;
+    let mut version = catalog.iter().find(|item| item.get("BSVersion").and_then(Value::as_str) == Some(version_id))
+        .cloned().unwrap_or_else(|| json!({ "BSVersion": version_id }));
+    let steam = args.get("versionSteam").and_then(Value::as_str) == Some("true");
+    let oculus = args.get("versionOculus").and_then(Value::as_str) == Some("true");
+    {
+        let object = version.as_object_mut()
+            .ok_or_else(|| serialized_error("Version catalog entry is invalid", "INVALID_VERSION"))?;
+        if let Some(name) = args.get("versionName").and_then(Value::as_str).filter(|name| !name.is_empty()) {
+            object.insert("name".to_owned(), json!(name));
+        }
+        object.insert("steam".to_owned(), json!(steam));
+        object.insert("oculus".to_owned(), json!(oculus));
+        if let Some(ino) = args.get("versionIno").and_then(Value::as_str).and_then(|value| value.parse::<u64>().ok()) {
+            object.insert("ino".to_owned(), json!(ino));
+        }
+    }
+    let version_path = versions::version_path(app, &version)?;
+    let mut metadata = if steam {
+        json!({ "id": "", "store": "steam" })
+    } else if oculus {
+        json!({ "id": "", "store": "oculus" })
+    } else {
+        json!({ "id": "", "store": "steam" })
+    };
+    if !steam && !oculus {
+        if let Ok(bytes) = fs::read(version_path.join("metadata.config")) {
+            if let Ok(stored) = serde_json::from_slice::<Value>(&bytes) {
+                if stored.get("store").and_then(Value::as_str).is_some_and(|store| matches!(store, "steam" | "oculus")) {
+                    metadata = stored;
+                }
+            }
+        }
+    }
+    let object = version.as_object_mut()
+        .ok_or_else(|| serialized_error("Version catalog entry is invalid", "INVALID_VERSION"))?;
+    object.insert("metadata".to_owned(), metadata);
+    object.insert("path".to_owned(), json!(version_path));
+    let mut launch_mods = Vec::new();
+    for (query_key, mod_name) in [
+        ("oculusMode", "oculus"), ("desktopMode", "fpfc"), ("debug", "debug"),
+        ("skipSteam", "skip_steam"), ("mapEditor", "editor"), ("protonLogs", "proton_logs"),
+        ("parallelViews", "parallel_views"),
+    ] {
+        if args.get(query_key).and_then(Value::as_str) == Some("true") {
+            launch_mods.push(json!(mod_name));
+        }
+    }
+    let mut result = json!({ "version": version, "launchMods": launch_mods });
+    if let Some(command) = args.get("command").and_then(Value::as_str) {
+        result["command"] = json!(command);
+    }
+    Ok(result)
 }
 
 fn set_protocols<R: Runtime>(app: &AppHandle<R>, protocols: &[&str], register: bool) -> Result<Value, SerializedError> {

@@ -1,4 +1,4 @@
-import { useConstant } from "./use-constant.hook";
+import { useEffect, useState } from "react";
 
 export function useWindowArgs<Key extends string>(...keys: Key[]): Record<Key, string|undefined> {
 
@@ -12,5 +12,20 @@ export function useWindowArgs<Key extends string>(...keys: Key[]): Record<Key, s
         return result;
     }
 
-    return useConstant(() => getArgs(...keys));
+    const [args, setArgs] = useState(() => getArgs(...keys));
+    const keysSignature = keys.join("\u0000");
+
+    useEffect(() => {
+        const unlisten = window.desktop.ipcRenderer.on("window-arguments", payload => {
+            if (!payload || typeof payload !== "object") return;
+            const values = payload as Record<string, unknown>;
+            setArgs(Object.fromEntries(keys.map(key => {
+                const value = values[key];
+                return [key, value === undefined || value === null ? undefined : String(value)];
+            })) as Record<Key, string|undefined>);
+        });
+        return () => unlisten?.();
+    }, [keysSignature]);
+
+    return args;
 }
