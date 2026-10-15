@@ -1027,6 +1027,12 @@
             "default": "默认",
             "default-tooltip": "默认为您的主文件夹"
         },
+        "preview-settings-import": {
+            "title": "导入现有设置？",
+            "description": "将 BSManager 设置（包括库路径）复制到此预览配置。游戏文件夹会保留在原位置。预览设置将单独保存。",
+            "import-settings": "导入设置",
+            "start-fresh": "重新开始"
+        },
         "choose-proton-folder": {
             "title": "Proton文件夹",
             "proton-folder-description": "在Linux上，BSManager需要Proton才能运行。请选择Proton的安装文件夹以继续。",

@@ -1027,6 +1027,12 @@
             "default": "Par défaut",
             "default-tooltip": "Par défaut, dans votre dossier personnel"
         },
+        "preview-settings-import": {
+            "title": "Importer les paramètres existants ?",
+            "description": "Copiez les paramètres BSManager, y compris le chemin de la bibliothèque, dans ce profil de prévisualisation. Les dossiers du jeu restent à leur emplacement. Les paramètres de prévisualisation sont enregistrés séparément.",
+            "import-settings": "Importer les paramètres",
+            "start-fresh": "Repartir de zéro"
+        },
         "choose-proton-folder": {
             "title": "Dossier Proton",
             "proton-folder-description": "Sous Linux, BSManager a besoin de Proton pour fonctionner. Choisissez le dossier d'installation de Proton pour continuer.",

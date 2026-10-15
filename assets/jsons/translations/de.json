@@ -1027,6 +1027,12 @@
             "default": "Standard",
             "default-tooltip": "Standardmäßig in Ihrem persönlichen Ordner"
         },
+        "preview-settings-import": {
+            "title": "Vorhandene Einstellungen importieren?",
+            "description": "Importiere die BSManager-Einstellungen einschließlich des Bibliothekspfads in dieses Vorschauprofil. Deine Spielordner bleiben am bisherigen Speicherort. Vorschau-Einstellungen werden getrennt gespeichert.",
+            "import-settings": "Einstellungen importieren",
+            "start-fresh": "Neu beginnen"
+        },
         "choose-proton-folder": {
             "title": "Proton-Ordner",
             "proton-folder-description": "Unter Linux benötigt BSManager Proton, um zu funktionieren. Wählen Sie den Installationsordner von Proton, um fortzufahren.",

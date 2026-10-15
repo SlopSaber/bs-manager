@@ -1027,6 +1027,12 @@
             "default": "기본값",
             "default-tooltip": "기본적으로 홈 폴더로 설정됩니다"
         },
+        "preview-settings-import": {
+            "title": "기존 설정을 가져올까요?",
+            "description": "라이브러리 경로를 포함한 BSManager 설정을 이 미리보기 프로필에 복사합니다. 게임 폴더는 현재 위치에 그대로 둡니다. 미리보기 설정은 별도로 저장됩니다.",
+            "import-settings": "설정 가져오기",
+            "start-fresh": "새로 시작"
+        },
         "choose-proton-folder": {
             "title": "Proton 폴더",
             "proton-folder-description": "Linux에서는 BSManager가 작동하려면 Proton이 필요합니다. 계속하려면 Proton 설치 폴더를 선택하세요.",

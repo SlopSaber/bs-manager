@@ -1027,6 +1027,12 @@
             "default": "Default",
             "default-tooltip": "Naka-default sa iyong home folder"
         },
+        "preview-settings-import": {
+            "title": "I-import ang mga kasalukuyang setting?",
+            "description": "Kopyahin ang mga setting ng BSManager, kabilang ang path ng library, papunta sa preview profile na ito. Mananatili sa dati nilang lokasyon ang mga folder ng laro. Hiwalay na ise-save ang mga setting ng preview.",
+            "import-settings": "I-import ang mga setting",
+            "start-fresh": "Magsimula muli"
+        },
         "choose-proton-folder": {
             "title": "Proton Folder",
             "proton-folder-description": "Sa Linux, kailangan ng BSManager ang Proton upang gumana. Piliin ang folder ng Proton installation upang magpatuloy.",

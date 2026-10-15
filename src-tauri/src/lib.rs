@@ -14,6 +14,7 @@ const SUPPORTERS: &str = include_str!("../../assets/jsons/patreons.json");
 const INSTALL_FOLDER: &str = "BSManager";
 const INSTANCES_FOLDER: &str = "BSInstances";
 const LEGACY_APP_DIRECTORY: &str = "bs-manager";
+const PREVIEW_IMPORT_MARKER: &str = "preview-legacy-settings-import";
 
 #[derive(Default)]
 struct AppState {
@@ -46,14 +47,61 @@ fn home_directory<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
 fn settings_path<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
     let resolver = app.path();
     if app.config().identifier == "io.bsmanager.bsmanager" {
-        return resolver.config_dir()
-            .map(|directory| directory.join(LEGACY_APP_DIRECTORY).join("config.json"))
-            .map_err(|error| error.to_string());
+        return legacy_settings_path(app);
     }
 
     resolver.app_config_dir()
         .map(|directory| directory.join("config.json"))
         .map_err(|error| error.to_string())
+}
+
+fn legacy_settings_path<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
+    app.path().config_dir()
+        .map(|directory| directory.join(LEGACY_APP_DIRECTORY).join("config.json"))
+        .map_err(|error| error.to_string())
+}
+
+fn preview_settings_import_needed<R: Runtime>(app: &AppHandle<R>) -> Result<bool, String> {
+    if app.config().identifier != "io.bsmanager.bsmanager.preview" {
+        return Ok(false);
+    }
+
+    if read_settings(app)?.contains_key(PREVIEW_IMPORT_MARKER) {
+        return Ok(false);
+    }
+
+    let legacy_path = legacy_settings_path(app)?;
+    match fs::metadata(legacy_path) {
+        Ok(metadata) => Ok(metadata.is_file()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(format!("Could not inspect legacy settings: {error}")),
+    }
+}
+
+fn import_legacy_settings<R: Runtime>(app: &AppHandle<R>, import: bool) -> Result<(), String> {
+    if app.config().identifier != "io.bsmanager.bsmanager.preview" {
+        return Err("Legacy settings import is only available in the preview profile".to_owned());
+    }
+
+    if !preview_settings_import_needed(app)? {
+        return Ok(());
+    }
+
+    let mut settings = if import {
+        let legacy_path = legacy_settings_path(app)?;
+        let contents = fs::read(&legacy_path).map_err(|error| format!("Could not read legacy settings: {error}"))?;
+        serde_json::from_slice::<Map<String, Value>>(&contents)
+            .map_err(|error| format!("Could not read legacy settings: {error}"))?
+    } else {
+        read_settings(app)?
+    };
+
+    if import {
+        let preview_settings = read_settings(app)?;
+        settings.extend(preview_settings);
+    }
+    settings.insert(PREVIEW_IMPORT_MARKER.to_owned(), json!(if import { "imported" } else { "skipped" }));
+    write_settings(app, &settings)
 }
 
 fn read_settings<R: Runtime>(app: &AppHandle<R>) -> Result<Map<String, Value>, String> {
@@ -321,6 +369,26 @@ async fn handle_request<R: Runtime>(app: &AppHandle<R>, window: &WebviewWindow<R
             settings.insert("installation-folder".into(), json!(parent));
             write_settings(app, &settings).map_err(|error| serialized_error(error, "SETTINGS_WRITE_FAILED"))?;
             Ok(json!(install_path))
+        }
+        "preview.legacy-settings-import-needed" => {
+            if window.label() != "main" {
+                return Err(serialized_error("Legacy settings import is only available in the main window", "WINDOW_NOT_ALLOWED"));
+            }
+            Ok(json!(preview_settings_import_needed(app).map_err(|error| serialized_error(error, "SETTINGS_IMPORT_CHECK_FAILED"))?))
+        }
+        "preview.import-legacy-settings" => {
+            if window.label() != "main" {
+                return Err(serialized_error("Legacy settings import is only available in the main window", "WINDOW_NOT_ALLOWED"));
+            }
+            import_legacy_settings(app, true).map_err(|error| serialized_error(error, "SETTINGS_IMPORT_FAILED"))?;
+            Ok(Value::Null)
+        }
+        "preview.skip-legacy-settings-import" => {
+            if window.label() != "main" {
+                return Err(serialized_error("Legacy settings import is only available in the main window", "WINDOW_NOT_ALLOWED"));
+            }
+            import_legacy_settings(app, false).map_err(|error| serialized_error(error, "SETTINGS_IMPORT_FAILED"))?;
+            Ok(Value::Null)
         }
         "static-configuration.get" => {
             let key = args.as_str().ok_or_else(|| serialized_error("Setting key is required", "INVALID_SETTING"))?;

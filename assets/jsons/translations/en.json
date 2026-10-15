@@ -1027,6 +1027,12 @@
             "default": "Default",
             "default-tooltip": "Defaults to your home folder"
         },
+        "preview-settings-import": {
+            "title": "Import existing settings?",
+            "description": "Copy BSManager settings, including the library path, into this preview profile. Your game folders stay where they are. Preview settings are saved separately.",
+            "import-settings": "Import settings",
+            "start-fresh": "Start fresh"
+        },
         "choose-proton-folder": {
             "title": "Proton Folder",
             "proton-folder-description": "On Linux, BSManager requires Proton to work. Choose the Proton installation folder to continue.",

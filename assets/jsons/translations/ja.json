@@ -1027,6 +1027,12 @@
             "default": "デフォルト",
             "default-tooltip": "デフォルトでは、ホームフォルダに設定されます"
         },
+        "preview-settings-import": {
+            "title": "既存の設定をインポートしますか？",
+            "description": "ライブラリのパスを含む BSManager の設定を、このプレビュー用プロファイルにコピーします。ゲームフォルダーは現在の場所に残ります。プレビューの設定は別に保存されます。",
+            "import-settings": "設定をインポート",
+            "start-fresh": "新しく始める"
+        },
         "choose-proton-folder": {
             "title": "Protonフォルダ",
             "proton-folder-description": "Linuxでは、BSManagerを動作させるためにProtonが必要です。続行するには、Protonのインストールフォルダを選択してください。",

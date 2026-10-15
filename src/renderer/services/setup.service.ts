@@ -7,6 +7,7 @@ import { IpcService } from "./ipc.service";
 import { ModalService } from "./modale.service";
 
 import { AskInstallPathModal } from "renderer/components/modal/modal-types/setup/ask-install-path.component";
+import { PreviewSettingsImportModal } from "renderer/components/modal/modal-types/setup/preview-settings-import-modal.component";
 import { ChooseProtonFolderModal } from "renderer/components/modal/modal-types/setup/choose-proton-folder-modal.component";
 
 // Handle setup modals/prompts, ordering of the modals/prompts may be done here
@@ -35,10 +36,33 @@ export class SetupService {
     public async check(): Promise<void> {
         try {
             // NOTE: for modal sequencing
+            await this.checkLegacySettingsImport();
             await this.checkInstallationPath();
 
             if (window.desktop.platform === "linux") {
                 await this.checkProtonFolder();
+            }
+        } catch (error) {
+            logRenderError(error);
+        }
+    }
+
+    private async checkLegacySettingsImport(): Promise<void> {
+        try {
+            const needed = await lastValueFrom(this.ipcService.sendV2("preview.legacy-settings-import-needed"));
+            if (!needed) {
+                return;
+            }
+
+            const response = await this.modalService.openModal(
+                PreviewSettingsImportModal,
+                { closable: false }
+            );
+
+            if (response.data === "import") {
+                await lastValueFrom(this.ipcService.sendV2("preview.import-legacy-settings"));
+            } else {
+                await lastValueFrom(this.ipcService.sendV2("preview.skip-legacy-settings-import"));
             }
         } catch (error) {
             logRenderError(error);

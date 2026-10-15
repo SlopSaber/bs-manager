@@ -1027,6 +1027,12 @@
             "default": "Predeterminado",
             "default-tooltip": "Por defecto, en su carpeta personal"
         },
+        "preview-settings-import": {
+            "title": "¿Importar la configuración existente?",
+            "description": "Copia la configuración de BSManager, incluida la ruta de la biblioteca, a este perfil de vista previa. Las carpetas del juego permanecerán donde están. La configuración de vista previa se guardará por separado.",
+            "import-settings": "Importar configuración",
+            "start-fresh": "Empezar de cero"
+        },
         "choose-proton-folder": {
             "title": "Carpeta de Proton",
             "proton-folder-description": "En Linux, BSManager necesita Proton para funcionar. Elija la carpeta de instalación de Proton para continuar.",

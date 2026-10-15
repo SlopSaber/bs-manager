@@ -1027,6 +1027,12 @@
             "default": "預設",
             "default-tooltip": "預設為您的主資料夾"
         },
+        "preview-settings-import": {
+            "title": "要匯入現有設定嗎？",
+            "description": "將 BSManager 設定（包括資料庫路徑）複製到此預覽設定檔。遊戲資料夾會保留在原處。預覽設定會另外儲存。",
+            "import-settings": "匯入設定",
+            "start-fresh": "重新開始"
+        },
         "choose-proton-folder": {
             "title": "Proton資料夾",
             "proton-folder-description": "在Linux上，BSManager需要Proton才能運行。請選擇Proton的安裝資料夾以繼續。",

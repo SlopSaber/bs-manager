@@ -1027,6 +1027,12 @@
             "default": "Padrão",
             "default-tooltip": "Utiliza sua pasta padrão"
         },
+        "preview-settings-import": {
+            "title": "Importar as configurações existentes?",
+            "description": "Copie as configurações do BSManager, incluindo o caminho da biblioteca, para este perfil de prévia. As pastas do jogo permanecem onde estão. As configurações da prévia são salvas separadamente.",
+            "import-settings": "Importar configurações",
+            "start-fresh": "Começar do zero"
+        },
         "choose-proton-folder": {
             "title": "Pasta Proton",
             "proton-folder-description": "No linux, BSManager precisa do Proton para funcionar. Escolha a pasta de instalação do Proton para continuar.",
