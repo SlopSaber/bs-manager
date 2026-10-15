@@ -1,6 +1,6 @@
 # Windows Tauri port status
 
-The `rewrite/tauri-windows` branch keeps the Electron application available for rollback and builds a Windows Tauri 2 application from the existing React renderer. The app version remains `1.6.0` for local artifacts.
+The `rewrite/tauri-windows` branch builds a Windows Tauri 2 application from the existing React renderer. Its package manifest has no Electron runtime or packager dependencies; Node is build tooling. Rollback uses a separately retained Electron installer. The app version remains `1.6.0` for local artifacts.
 
 ## Build
 
@@ -15,8 +15,8 @@ Each command builds the locked Rust helpers, type-checks the Tauri renderer cont
 
 Current local installers compile successfully and are unsigned. The generated NSIS script contains both preinstall and preuninstall hook call sites. The hook code was included in the installer builds, but neither installer has been executed; migration, registry restoration, and uninstall behavior still need user-led review:
 
-- Preview: `release/tauri/preview/BSManager-Preview-1.6.0-x64-setup.exe`, SHA-256 `08f41a365101f5abaf34fe289dfb0d7ddbd4f7b272851d9e470eb1710c9ca539`.
-- Replacement: `release/tauri/replacement/BSManager-1.6.0-x64-setup.exe`, SHA-256 `185afab0af295e971fbdac80a6a4dfe8e47bc4c055ad208b6c470b15045c3f9f`.
+- Preview: `release/tauri/preview/BSManager-Preview-1.6.0-x64-setup.exe`, SHA-256 `9baeb2333f450e07cb6f3df53414dacb142ff4e30a7db8239e38a063e44a7144`.
+- Replacement: `release/tauri/replacement/BSManager-1.6.0-x64-setup.exe`, SHA-256 `114fbdf96106377c19eae8710a385ba0dc4744b00cd99126beac50dd44ed37d4`.
 
 ## Implemented in the Rust host
 

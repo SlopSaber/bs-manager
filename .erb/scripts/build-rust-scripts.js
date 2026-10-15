@@ -1,5 +1,5 @@
 import path from 'path';
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readdirSync } from 'fs-extra';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { execFileSync } from 'child_process';
 
 const root = path.join(__dirname, '..', '..');
