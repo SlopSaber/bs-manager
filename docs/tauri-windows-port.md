@@ -20,13 +20,14 @@ The commands build the renderer, compile Rust, create NSIS installers, and write
 - Preview installer does not declare protocol or file associations. Protocol registration happens only when the renderer calls the registration routes.
 - ModelSaber lookup/search, model download, one-click install, local model listing/hash lookup, export, and deletion are implemented in Rust.
 - BeatSaver map search, map lookup by ID or hashes, playlist search, and playlist details use the existing renderer request shapes. Map hash lookups retain an in-memory cache and tolerate failed hash batches as the Electron service does.
+- Local map listing supports Info.dat versions 2, 3, and 4, computes Beat Saber SHA-1 hashes, records added dates, and streams the existing listing progress shape. Map deletion is limited to direct children of managed CustomLevels folders.
 - Build metadata records profile, identifier, version, installer name, hash, and signing status.
 
 ## Parity still required
 
 This branch is an early port foundation. It does not provide full BSManager parity and is not ready to replace an installed Electron build. Rust currently returns `NOT_IMPLEMENTED` for game operations it does not own.
 
-- Steam and Meta discovery, login, download, verification, cancellation, game launch, local map and playlist operations, mod management, sharing, junctions, cache operations, relocation, shortcuts, LIV, proxy support, process tracking, and updater behavior still need Rust implementations.
+- Steam and Meta discovery, login, download, verification, cancellation, game launch, map archive import/export/download, playlist operations, mod management, sharing, junctions, cache operations, relocation, shortcuts, LIV, proxy support, process tracking, and updater behavior still need Rust implementations.
 - Installed-version discovery currently scans only `BSInstances` under the selected BSManager folder. Steam and Meta library discovery and legacy metadata import remain outstanding.
 - Preview has no explicit importer for Electron settings. Replacement does not back up settings, invoke the Electron uninstaller, or install transactionally. Do not distribute or install the replacement artifact until those steps exist.
 - Deep-link schemes can be registered from settings, but startup events still need to route into the matching map, playlist, model, or file operation.

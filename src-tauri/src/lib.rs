@@ -21,6 +21,7 @@ mod steam;
 mod versions;
 mod windows_integration;
 mod beat_saver;
+mod maps;
 
 const VERSION_LIBRARY: &str = include_str!("../../assets/jsons/bs-versions.json");
 const SUPPORTERS: &str = include_str!("../../assets/jsons/patreons.json");
@@ -403,6 +404,12 @@ async fn handle_request<R: Runtime>(
         "search-models" => models::search_models(&args).await,
         "bsv-search-map" | "bsv-get-map-details-from-hashs" | "bsv-get-map-details-by-id" |
         "bsv-search-playlist" | "bsv-get-playlist-details-by-id" => beat_saver::dispatch(channel, &args).await,
+        "load-version-maps" => maps::load_version_maps(app, window, response_channel, &args, cancelled).await,
+        "delete-maps" => {
+            let app_state = app.state::<AppState>();
+            let _operation = app_state.library_operation.lock().await;
+            maps::delete_maps(app, window, response_channel, &args, cancelled).await
+        }
         "download-model" => {
             let app_state = app.state::<AppState>();
             let _operation = app_state.library_operation.lock().await;
@@ -703,7 +710,7 @@ async fn ipc_send<R: Runtime>(app: AppHandle<R>, window: WebviewWindow<R>, chann
             log::warn!("Windows Tauri one-way route '{channel}' failed: {}", error.message);
         }
     } else {
-        ipc_response(&window, &channel, &request, result, matches!(channel.as_str(), "import-version" | "download-bs-version" | "auto-download-bs-version" | "download-bs-version-qr" | "bs-oculus-download" | "bs-launch.launch" | "download-model" | "get-version-models" | "export-models" | "delete-models"));
+        ipc_response(&window, &channel, &request, result, matches!(channel.as_str(), "import-version" | "download-bs-version" | "auto-download-bs-version" | "download-bs-version-qr" | "bs-oculus-download" | "bs-launch.launch" | "download-model" | "get-version-models" | "export-models" | "delete-models" | "load-version-maps" | "delete-maps"));
     }
 }
 
