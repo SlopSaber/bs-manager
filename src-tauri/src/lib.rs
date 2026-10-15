@@ -411,6 +411,8 @@ async fn handle_request<R: Runtime>(
             models::one_click_install_model(app, &args, cancelled).await
         }
         "get-version-models" => models::get_version_models(app, window, response_channel, &args, cancelled).await,
+        "export-models" => models::export_models(app, window, response_channel, &args, cancelled).await,
+        "delete-models" => models::delete_models(app, window, response_channel, &args, cancelled).await,
         "is-oculus-sideloaded-apps-enabled" => windows_integration::sideloaded_apps_enabled(),
         "enable-oculus-sideloaded-apps" => windows_integration::enable_sideloaded_apps(app).await,
         "vr-runtime.get-active" => Ok(windows_integration::active_vr_runtime(args.as_str())),
@@ -698,7 +700,7 @@ async fn ipc_send<R: Runtime>(app: AppHandle<R>, window: WebviewWindow<R>, chann
             log::warn!("Windows Tauri one-way route '{channel}' failed: {}", error.message);
         }
     } else {
-        ipc_response(&window, &channel, &request, result, matches!(channel.as_str(), "import-version" | "download-bs-version" | "auto-download-bs-version" | "download-bs-version-qr" | "bs-oculus-download" | "bs-launch.launch" | "download-model" | "get-version-models"));
+        ipc_response(&window, &channel, &request, result, matches!(channel.as_str(), "import-version" | "download-bs-version" | "auto-download-bs-version" | "download-bs-version-qr" | "bs-oculus-download" | "bs-launch.launch" | "download-model" | "get-version-models" | "export-models" | "delete-models"));
     }
 }
 

@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    fs::File,
+    fs::{self, File},
     io::Read,
     path::{Path, PathBuf},
     sync::{Arc, Mutex, OnceLock, atomic::{AtomicBool, Ordering}},
@@ -13,11 +13,170 @@ use serde_json::{Value, json};
 use tauri::{AppHandle, Emitter, Manager, Runtime, WebviewWindow};
 use tokio::io::AsyncWriteExt;
 use url::Url;
+use zip::{CompressionMethod, write::{SimpleFileOptions, ZipWriter}};
 
 use crate::{SerializedError, linker, serialized_error, versions};
 
 const MODEL_SABER_API: &str = "https://modelsaber.com/api/v2/get.php";
 static MODEL_HASH_CACHE: OnceLock<Mutex<HashMap<String, Value>>> = OnceLock::new();
+
+pub async fn export_models<R: Runtime>(
+    app: &AppHandle<R>,
+    window: &WebviewWindow<R>,
+    response_channel: Option<&str>,
+    args: &Value,
+    cancelled: Arc<AtomicBool>,
+) -> Result<Value, SerializedError> {
+    let output = args.get("outPath").and_then(Value::as_str).filter(|path| !path.trim().is_empty())
+        .ok_or_else(|| serialized_error("Output path is required", "INVALID_PATH"))?;
+    let output = PathBuf::from(output);
+    let version = args.get("version").filter(|version| !version.is_null());
+    let mut files = Vec::<(PathBuf, String)>::new();
+    let selected = args.get("models").and_then(Value::as_array).filter(|models| !models.is_empty());
+    if let Some(selected) = selected {
+        for model in selected {
+            let kind = model_type(model)?;
+            let model_version = model.get("version").filter(|value| !value.is_null()).or(version);
+            let root = model_folder(app, kind, model_version)?;
+            let path = model.get("path").and_then(Value::as_str)
+                .ok_or_else(|| serialized_error("Model path is required", "INVALID_PATH"))?;
+            let path = resolve_model_file(&root, Path::new(path), kind)?;
+            let name = Path::new(model_folder_name(kind)?).join(path.file_name().unwrap_or_default());
+            files.push((path, name.to_string_lossy().replace('\\', "/")));
+        }
+    } else {
+        for kind in ["avatar", "bloq", "platform", "saber"] {
+            let root = model_folder(app, kind, version)?;
+            tokio::fs::create_dir_all(&root).await
+                .map_err(|error| serialized_error(error.to_string(), "MODEL_PATH_FAILED"))?;
+            let scan_root = root.clone();
+            let kind = kind.to_owned();
+            let mut found = tokio::task::spawn_blocking(move || collect_model_files(&scan_root))
+                .await.map_err(|error| serialized_error(error.to_string(), "MODEL_EXPORT_FAILED"))?
+                .map_err(|error| serialized_error(error.to_string(), "MODEL_EXPORT_FAILED"))?;
+            for path in found.drain(..) {
+                let relative = path.strip_prefix(&root).unwrap_or(&path);
+                let name = Path::new(model_folder_name(&kind)?).join(relative);
+                files.push((path, name.to_string_lossy().replace('\\', "/")));
+            }
+        }
+    }
+    if files.iter().any(|(path, _)| path == &output) {
+        return Err(serialized_error("The archive output cannot replace a model file", "INVALID_PATH"));
+    }
+    let total = files.len() as u64;
+    let output_text = output.to_string_lossy().to_string();
+    emit_model_progress(window, response_channel, 0, total, Some(json!(output_text)))?;
+    if let Some(parent) = output.parent() {
+        tokio::fs::create_dir_all(parent).await
+            .map_err(|error| serialized_error(error.to_string(), "MODEL_EXPORT_FAILED"))?;
+    }
+    let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel::<u64>();
+    let worker_cancelled = cancelled.clone();
+    let worker_output = output.clone();
+    let worker = tokio::task::spawn_blocking(move || write_model_archive(&worker_output, files, worker_cancelled, sender));
+    let mut progress_error = None;
+    while let Some(current) = receiver.recv().await {
+        if let Err(error) = emit_model_progress(window, response_channel, current, total, Some(json!(output_text))) {
+            cancelled.store(true, Ordering::Relaxed);
+            progress_error = Some(error);
+        }
+    }
+    let archived = worker.await
+        .map_err(|error| serialized_error(error.to_string(), "MODEL_EXPORT_FAILED"))?;
+    if let Some(error) = progress_error { return Err(error); }
+    archived.map_err(|error| serialized_error(error, "MODEL_EXPORT_FAILED"))?;
+    Ok(Value::Null)
+}
+
+pub async fn delete_models<R: Runtime>(
+    app: &AppHandle<R>,
+    window: &WebviewWindow<R>,
+    response_channel: Option<&str>,
+    args: &Value,
+    cancelled: Arc<AtomicBool>,
+) -> Result<Value, SerializedError> {
+    let models = args.as_array()
+        .ok_or_else(|| serialized_error("Models must be an array", "INVALID_MODELS"))?;
+    let total = models.len() as u64;
+    let mut deleted = Vec::with_capacity(models.len());
+    emit_model_progress(window, response_channel, 0, total, Some(json!(deleted)))?;
+    for (index, model) in models.iter().enumerate() {
+        if cancelled.load(Ordering::Relaxed) {
+            return Err(serialized_error("Model deletion was cancelled", "REQUEST_CANCELLED"));
+        }
+        let kind = model_type(model)?;
+        let version = model.get("version").filter(|value| !value.is_null());
+        let root = model_folder(app, kind, version)?;
+        let path = model.get("path").and_then(Value::as_str)
+            .ok_or_else(|| serialized_error("Model path is required", "INVALID_PATH"))?;
+        let path = resolve_model_file(&root, Path::new(path), kind)?;
+        tokio::fs::remove_file(&path).await
+            .map_err(|error| serialized_error(error.to_string(), "MODEL_DELETE_FAILED"))?;
+        deleted.push(model.clone());
+        emit_model_progress(window, response_channel, index as u64 + 1, total, Some(json!(deleted)))?;
+    }
+    Ok(Value::Null)
+}
+
+fn write_model_archive(
+    output: &Path,
+    files: Vec<(PathBuf, String)>,
+    cancelled: Arc<AtomicBool>,
+    progress: tokio::sync::mpsc::UnboundedSender<u64>,
+) -> Result<(), String> {
+    let result = (|| {
+        let mut archive = ZipWriter::new(File::create(output).map_err(|error| error.to_string())?);
+        let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+        for (index, (path, name)) in files.into_iter().enumerate() {
+            if cancelled.load(Ordering::Relaxed) {
+                return Err("Model export was cancelled".to_owned());
+            }
+            archive.start_file(name, options).map_err(|error| error.to_string())?;
+            let mut input = File::open(path).map_err(|error| error.to_string())?;
+            std::io::copy(&mut input, &mut archive).map_err(|error| error.to_string())?;
+            let _ = progress.send(index as u64 + 1);
+        }
+        archive.finish().map_err(|error| error.to_string())?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(output);
+    }
+    result
+}
+
+fn collect_model_files(root: &Path) -> std::io::Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    collect_model_files_recursive(root, &mut files)?;
+    Ok(files)
+}
+
+fn collect_model_files_recursive(directory: &Path, files: &mut Vec<PathBuf>) -> std::io::Result<()> {
+    for entry in fs::read_dir(directory)? {
+        let entry = entry?;
+        let path = entry.path();
+        let kind = entry.file_type()?;
+        if kind.is_dir() {
+            collect_model_files_recursive(&path, files)?;
+        } else if kind.is_file() {
+            files.push(path);
+        }
+    }
+    Ok(())
+}
+
+fn resolve_model_file(root: &Path, path: &Path, kind: &str) -> Result<PathBuf, SerializedError> {
+    let root = fs::canonicalize(root).map_err(|error| serialized_error(error.to_string(), "INVALID_PATH"))?;
+    let path = fs::canonicalize(path).map_err(|error| serialized_error(error.to_string(), "INVALID_PATH"))?;
+    if !path.starts_with(&root) || !path.is_file() {
+        return Err(serialized_error("Model path is outside its content folder", "INVALID_PATH"));
+    }
+    if path.extension().and_then(|extension| extension.to_str()) != Some(model_extension(kind)?.trim_start_matches('.')) {
+        return Err(serialized_error("Model file extension does not match its type", "INVALID_MODEL"));
+    }
+    Ok(path)
+}
 
 pub async fn get_version_models<R: Runtime>(
     app: &AppHandle<R>,
