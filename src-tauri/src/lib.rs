@@ -10,11 +10,11 @@ use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
 
 mod library;
+mod versions;
 
 const VERSION_LIBRARY: &str = include_str!("../../assets/jsons/bs-versions.json");
 const SUPPORTERS: &str = include_str!("../../assets/jsons/patreons.json");
 const INSTALL_FOLDER: &str = "BSManager";
-const INSTANCES_FOLDER: &str = "BSInstances";
 const LEGACY_APP_DIRECTORY: &str = "bs-manager";
 const PREVIEW_IMPORT_MARKER: &str = "preview-legacy-settings-import";
 
@@ -316,40 +316,6 @@ async fn save_file<R: Runtime>(app: &AppHandle<R>, window: &WebviewWindow<R>, ar
     Ok(json!(path))
 }
 
-fn get_installed_versions<R: Runtime>(app: &AppHandle<R>) -> Result<Value, SerializedError> {
-    let root = install_directory(app).map_err(|error| serialized_error(error, "INSTALL_PATH_FAILED"))?
-        .join(INSTANCES_FOLDER);
-    let entries = match fs::read_dir(root) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(json!([])),
-        Err(error) => return Err(serialized_error(error.to_string(), "INSTALL_PATH_FAILED")),
-    };
-    let versions: Vec<Value> = entries.filter_map(Result::ok).filter_map(|entry| {
-        let path = entry.path();
-        if !path.join("Beat Saber.exe").is_file() { return None; }
-        let manager = path.join("Beat Saber_Data").join("globalgamemanagers");
-        let version_text = fs::read_to_string(manager).ok()?;
-        let known = serde_json::from_str::<Vec<Value>>(VERSION_LIBRARY).ok()?;
-        let mut version = known.into_iter().rev().find(|candidate| {
-            candidate.get("BSVersion").and_then(Value::as_str).is_some_and(|value| version_text.contains(value))
-        })?;
-        let object = version.as_object_mut()?;
-        let folder_name = entry.file_name().to_string_lossy().to_string();
-        let game_version = object.get("BSVersion").and_then(Value::as_str).unwrap_or_default().to_owned();
-        if folder_name != game_version { object.insert("name".into(), json!(folder_name)); }
-        object.insert("path".into(), json!(path));
-        object.insert("steam".into(), json!(false));
-        object.insert("oculus".into(), json!(false));
-        if let Ok(metadata) = fs::read(path.join("metadata.config")) {
-            if let Ok(metadata) = serde_json::from_slice::<Value>(&metadata) {
-                object.insert("metadata".into(), metadata);
-            }
-        }
-        Some(version)
-    }).collect();
-    Ok(json!(versions))
-}
-
 async fn handle_request<R: Runtime>(app: &AppHandle<R>, window: &WebviewWindow<R>, channel: &str, args: Value) -> Result<Value, SerializedError> {
     match channel {
         "current-version" => Ok(json!(env!("CARGO_PKG_VERSION"))),
@@ -449,7 +415,47 @@ async fn handle_request<R: Runtime>(app: &AppHandle<R>, window: &WebviewWindow<R
             Ok(Value::Null)
         }
         "bs-version.get-version-dict" => serde_json::from_str(VERSION_LIBRARY).map_err(|error| serialized_error(error.to_string(), "VERSION_LIBRARY_READ_FAILED")),
-        "bs-version.installed-versions" => get_installed_versions(app),
+        "bs-version.installed-versions" => {
+            let app_state = app.state::<AppState>();
+            let _operation = app_state.library_operation.lock().await;
+            let app = app.clone();
+            tokio::task::spawn_blocking(move || versions::get_installed_versions(&app))
+                .await
+                .map_err(|error| serialized_error(format!("Version scan worker failed: {error}"), "VERSION_SCAN_FAILED"))?
+        }
+        "bs-version.open-folder" => {
+            let path = versions::version_path(app, &args)?;
+            if path.is_dir() {
+                app.opener().open_path(path.to_string_lossy().to_string(), None::<&str>)
+                    .map_err(|error| serialized_error(error.to_string(), "OPEN_PATH_FAILED"))?;
+            }
+            Ok(Value::Null)
+        }
+        "bs-version.edit" => {
+            let app_state = app.state::<AppState>();
+            let _operation = app_state.library_operation.lock().await;
+            versions::edit_version(app, &args)
+        }
+        "bs-version.clone" => {
+            let app_state = app.state::<AppState>();
+            let _operation = app_state.library_operation.lock().await;
+            versions::clone_version(app, &args).await
+        }
+        "bs.uninstall" => {
+            let app_state = app.state::<AppState>();
+            let _operation = app_state.library_operation.lock().await;
+            versions::uninstall_version(app, &args).await
+        }
+        "get-version-full-path" => {
+            Ok(json!(versions::version_path(app, &args)?.to_string_lossy().to_string()))
+        }
+        "full-version-path-to-relative" => {
+            let version = args.get("version").ok_or_else(|| serialized_error("Version is required", "INVALID_VERSION"))?;
+            let version_path = versions::version_path(app, version)?;
+            let full_path = args.get("fullPath").and_then(Value::as_str)
+                .ok_or_else(|| serialized_error("Full path is required", "INVALID_PATH"))?;
+            Ok(json!(versions::relative_path(&version_path, Path::new(full_path)).to_string_lossy().to_string()))
+        }
         "register-maps-deep-link" => set_protocols(app, &["beatsaver", "web+bsmap"], true),
         "unregister-maps-deep-link" => set_protocols(app, &["beatsaver", "web+bsmap"], false),
         "is-map-deep-links-enabled" => are_protocols_registered(app, &["beatsaver", "web+bsmap"]),
