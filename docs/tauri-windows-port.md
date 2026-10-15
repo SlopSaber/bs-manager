@@ -11,12 +11,12 @@ pnpm run build:tauri:win
 pnpm run build:tauri:win:replacement
 ```
 
-Each command type-checks the Tauri renderer contracts, builds all six HTML entry pages, compiles Rust, creates an NSIS installer, and writes SHA-256 metadata under `release/tauri/<profile>`. The rewrite-branch Windows workflow builds both profiles and uploads installers as artifacts; it runs no tests. Legacy test, lint, and release jobs skip the rewrite branch.
+Each command builds the locked Rust helpers, type-checks the Tauri renderer contracts, builds all six HTML entry pages, compiles the Tauri host, creates an NSIS installer, and writes SHA-256 metadata under `release/tauri/<profile>`. The rewrite-branch Windows workflow provisions Rust, builds both profiles, and uploads installers as artifacts; it runs no tests. Legacy test, lint, and release jobs skip the rewrite branch.
 
 Current local installers compile successfully and are unsigned. The generated NSIS script contains both preinstall and preuninstall hook call sites. The hook code was included in the installer builds, but neither installer has been executed; migration, registry restoration, and uninstall behavior still need user-led review:
 
-- Preview: `release/tauri/preview/BSManager-Preview-1.6.0-x64-setup.exe`, SHA-256 `dba98317635b66d47978159ee47216be7506df20f1172a76fecf8e80654ebf84`.
-- Replacement: `release/tauri/replacement/BSManager-1.6.0-x64-setup.exe`, SHA-256 `831fb281c3b819d4d84283d6a474dc87fe7ffd98d4e0085dc92122f3d2844918`.
+- Preview: `release/tauri/preview/BSManager-Preview-1.6.0-x64-setup.exe`, SHA-256 `08f41a365101f5abaf34fe289dfb0d7ddbd4f7b272851d9e470eb1710c9ca539`.
+- Replacement: `release/tauri/replacement/BSManager-1.6.0-x64-setup.exe`, SHA-256 `185afab0af295e971fbdac80a6a4dfe8e47bc4c055ad208b6c470b15045c3f9f`.
 
 ## Implemented in the Rust host
 
