@@ -215,6 +215,21 @@ async fn process_id_by_name(executable: &str) -> Option<u32> {
     })
 }
 
+pub async fn legacy_manager_running() -> Result<bool, SerializedError> {
+    let output = tokio::process::Command::new("tasklist")
+        .args(["/FI", "IMAGENAME eq BSManager.exe", "/FO", "CSV", "/NH"])
+        .creation_flags(0x08000000)
+        .output().await
+        .map_err(|error| serialized_error(error.to_string(), "LEGACY_PROCESS_CHECK_FAILED"))?;
+    if !output.status.success() {
+        return Err(serialized_error("Windows could not inspect running processes", "LEGACY_PROCESS_CHECK_FAILED"));
+    }
+    let output = String::from_utf8_lossy(&output.stdout);
+    Ok(output.lines().any(|line| {
+        line.split(',').next().unwrap_or_default().trim().trim_matches('"').eq_ignore_ascii_case("BSManager.exe")
+    }))
+}
+
 pub fn parse_leading_environment(command: &str) -> (Vec<(String, String)>, String) {
     let characters = command.chars().collect::<Vec<_>>();
     let mut position = 0;

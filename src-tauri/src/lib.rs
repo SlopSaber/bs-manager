@@ -1,9 +1,11 @@
-use std::{collections::HashMap, fs, path::{Path, PathBuf}, sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}}};
+use std::{collections::HashMap, fs, path::{Path, PathBuf}, sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}}, time::Duration};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use tauri::{AppHandle, Emitter, Manager, Runtime, WebviewUrl, WebviewWindow, WebviewWindowBuilder, window::{ProgressBarState, ProgressBarStatus}};
+use tauri_plugin_updater::{Update, UpdaterExt};
 use regex::Regex;
 use tauri_plugin_dialog::{DialogExt, FilePath};
 use tauri_plugin_notification::NotificationExt;
@@ -35,6 +37,7 @@ const SUPPORTERS: &str = include_str!("../../assets/jsons/patreons.json");
 const INSTALL_FOLDER: &str = "BSManager";
 const LEGACY_APP_DIRECTORY: &str = "bs-manager";
 const PREVIEW_IMPORT_MARKER: &str = "preview-legacy-settings-import";
+const MAX_UPDATE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
 #[derive(Default)]
 struct AppState {
@@ -44,8 +47,15 @@ struct AppState {
     oculus_download: Mutex<Option<oculus::OculusControl>>,
     launch_in_progress: AtomicBool,
     active_requests: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    pending_update: tokio::sync::Mutex<Option<PendingUpdate>>,
+    update_operation: tokio::sync::Mutex<()>,
     steam_download: Mutex<Option<steam::SteamControl>>,
     log_redactions: Arc<Mutex<LogRedactions>>,
+}
+
+struct PendingUpdate {
+    update: Update,
+    downloaded: Option<Vec<u8>>,
 }
 
 #[derive(Default)]
@@ -207,6 +217,165 @@ fn write_settings<R: Runtime>(app: &AppHandle<R>, settings: &Map<String, Value>)
     let temporary = path.with_extension("json.tmp");
     fs::write(&temporary, bytes).map_err(|error| format!("Could not write settings: {error}"))?;
     fs::rename(&temporary, &path).map_err(|error| format!("Could not replace settings: {error}"))
+}
+
+fn configured_update_source<R: Runtime>(app: &AppHandle<R>) -> Result<Option<(url::Url, String)>, SerializedError> {
+    let (endpoint, public_key) = match app.config().identifier.as_str() {
+        "io.bsmanager.bsmanager.preview" => (
+            option_env!("BSM_TAURI_PREVIEW_UPDATE_ENDPOINT"),
+            option_env!("BSM_TAURI_PREVIEW_UPDATE_PUBLIC_KEY"),
+        ),
+        "io.bsmanager.bsmanager" => (
+            option_env!("BSM_TAURI_REPLACEMENT_UPDATE_ENDPOINT"),
+            option_env!("BSM_TAURI_REPLACEMENT_UPDATE_PUBLIC_KEY"),
+        ),
+        _ => return Ok(None),
+    };
+
+    match (endpoint.filter(|value| !value.trim().is_empty()), public_key.filter(|value| !value.trim().is_empty())) {
+        (None, None) => Ok(None),
+        (Some(endpoint), Some(public_key)) => {
+            let parsed = url::Url::parse(endpoint)
+                .map_err(|error| serialized_error(error.to_string(), "UPDATE_CONFIGURATION_INVALID"))?;
+            if parsed.scheme() != "https" {
+                return Err(serialized_error("Tauri update endpoint must use HTTPS", "UPDATE_CONFIGURATION_INVALID"));
+            }
+            Ok(Some((parsed, public_key.to_owned())))
+        }
+        _ => Err(serialized_error(
+            "Tauri update endpoint and public key must be configured together",
+            "UPDATE_CONFIGURATION_INCOMPLETE",
+        )),
+    }
+}
+
+async fn check_for_update<R: Runtime>(app: &AppHandle<R>) -> Result<Option<Update>, SerializedError> {
+    let Some((endpoint, public_key)) = configured_update_source(app)? else { return Ok(None) };
+    let builder = app.updater_builder()
+        .pubkey(public_key)
+        .configure_client(|builder| {
+            if crate::proxy::is_enabled() { builder } else { builder.no_proxy() }
+        })
+        .endpoints(vec![endpoint])
+        .map_err(|error| serialized_error(error.to_string(), "UPDATE_CONFIGURATION_INVALID"))?;
+    builder.build()
+        .map_err(|error| serialized_error(error.to_string(), "UPDATE_CONFIGURATION_INVALID"))?
+        .check()
+        .await
+        .map_err(|error| serialized_error(error.to_string(), "UPDATE_CHECK_FAILED"))
+}
+
+async fn set_pending_update<R: Runtime>(app: &AppHandle<R>, update: Option<Update>) {
+    let state = app.state::<AppState>();
+    let mut pending = state.pending_update.lock().await;
+    *pending = update.map(|update| PendingUpdate { update, downloaded: None });
+}
+
+fn emit_update_progress<R: Runtime>(
+    window: &WebviewWindow<R>,
+    response_channel: Option<&str>,
+    current: u64,
+    total: u64,
+) -> Result<(), SerializedError> {
+    if let Some(channel) = response_channel {
+        window.emit(channel, json!({ "current": current, "total": total }))
+            .map_err(|error| serialized_error(error.to_string(), "UPDATE_PROGRESS_FAILED"))?;
+    }
+    Ok(())
+}
+
+async fn wait_for_update_cancellation(cancelled: &AtomicBool) {
+    while !cancelled.load(Ordering::Relaxed) {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+async fn download_update<R: Runtime>(
+    app: &AppHandle<R>,
+    window: &WebviewWindow<R>,
+    response_channel: Option<&str>,
+    cancelled: Arc<AtomicBool>,
+) -> Result<Value, SerializedError> {
+    let pending = app.state::<AppState>().pending_update.lock().await.take();
+    let mut pending = match pending {
+        Some(pending) => pending,
+        None => {
+            if configured_update_source(app)?.is_none() {
+                return Err(serialized_error("Remote updates are disabled until signed Tauri update sources are configured", "UPDATES_DISABLED"));
+            }
+            PendingUpdate {
+                update: check_for_update(app).await?
+                    .ok_or_else(|| serialized_error("No update is available", "NO_UPDATE_AVAILABLE"))?,
+                downloaded: None,
+            }
+        }
+    };
+    if pending.downloaded.is_some() {
+        *app.state::<AppState>().pending_update.lock().await = Some(pending);
+        return Ok(Value::Null);
+    }
+
+    let client = crate::proxy::client_builder()
+        .connect_timeout(Duration::from_secs(20))
+        .timeout(Duration::from_secs(30 * 60))
+        .build()
+        .map_err(|error| serialized_error(error.to_string(), "UPDATE_NETWORK_FAILED"))?;
+    let response = tokio::select! {
+        response = client.get(pending.update.download_url.clone()).send() => {
+            response.map_err(|error| serialized_error(error.to_string(), "UPDATE_DOWNLOAD_FAILED"))?
+        }
+        _ = wait_for_update_cancellation(&cancelled) => {
+            return Err(serialized_error("Update download was cancelled", "REQUEST_CANCELLED"));
+        }
+    };
+    if !response.status().is_success() {
+        return Err(serialized_error(format!("Update download returned HTTP {}", response.status()), "UPDATE_DOWNLOAD_FAILED"));
+    }
+    let total = response.content_length().unwrap_or(0);
+    if total > MAX_UPDATE_BYTES {
+        return Err(serialized_error("Update package exceeds the 2 GiB size limit", "UPDATE_TOO_LARGE"));
+    }
+    emit_update_progress(window, response_channel, 0, total)?;
+    let mut downloaded = Vec::new();
+    let mut current = 0_u64;
+    let mut stream = response.bytes_stream();
+    loop {
+        let next = tokio::select! {
+            chunk = stream.next() => chunk,
+            _ = wait_for_update_cancellation(&cancelled) => {
+                return Err(serialized_error("Update download was cancelled", "REQUEST_CANCELLED"));
+            }
+        };
+        let Some(result) = next else { break };
+        let chunk = result.map_err(|error| serialized_error(error.to_string(), "UPDATE_DOWNLOAD_FAILED"))?;
+        current = current.saturating_add(chunk.len() as u64);
+        if current > MAX_UPDATE_BYTES {
+            return Err(serialized_error("Update package exceeds the 2 GiB size limit", "UPDATE_TOO_LARGE"));
+        }
+        downloaded.extend_from_slice(&chunk);
+        if total > 0 {
+            emit_update_progress(window, response_channel, current.min(total), total)?;
+        }
+    }
+    if cancelled.load(Ordering::Relaxed) {
+        return Err(serialized_error("Update download was cancelled", "REQUEST_CANCELLED"));
+    }
+    pending.update.verify(&downloaded)
+        .map_err(|error| serialized_error(error.to_string(), "UPDATE_SIGNATURE_INVALID"))?;
+    emit_update_progress(window, response_channel, 100, 100)?;
+    pending.downloaded = Some(downloaded);
+    *app.state::<AppState>().pending_update.lock().await = Some(pending);
+    Ok(Value::Null)
+}
+
+async fn install_update<R: Runtime>(app: &AppHandle<R>) -> Result<Value, SerializedError> {
+    let pending = app.state::<AppState>().pending_update.lock().await.take()
+        .ok_or_else(|| serialized_error("No downloaded update is ready to install", "NO_DOWNLOADED_UPDATE"))?;
+    let bytes = pending.downloaded
+        .ok_or_else(|| serialized_error("Update package has not been downloaded", "NO_DOWNLOADED_UPDATE"))?;
+    pending.update.install(bytes)
+        .map_err(|error| serialized_error(error.to_string(), "UPDATE_INSTALL_FAILED"))?;
+    Ok(Value::Null)
 }
 
 fn default_install_directory<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
@@ -413,6 +582,24 @@ async fn handle_request<R: Runtime>(
     response_channel: Option<&str>,
     cancelled: Arc<AtomicBool>,
 ) -> Result<Value, SerializedError> {
+    let mutates_library = matches!(channel,
+        "import-version" | "download-bs-version" | "auto-download-bs-version" | "download-bs-version-qr" |
+        "bs-oculus-download" | "bs-version.clone" | "bs.uninstall" |
+        "delete-maps" | "bs-maps.import-maps" | "bs-maps.download-map" | "one-click-install-map" |
+        "install-playlist-file" | "import-playlists" | "delete-playlist" | "download-playlist" | "one-click-install-playlist" |
+        "bs-mods.import-mods" | "bs-mods.install-mods" | "bs-mods.uninstall-mods" | "bs-mods.uninstall-all-mods" |
+        "download-model" | "one-click-install-model" | "delete-models" |
+        "link-version-folder-action" | "relink-all-versions-folders"
+    ) || (channel == "bs-installer.set-install-path" && args.get("move").and_then(Value::as_bool) == Some(true));
+    if app.config().identifier == "io.bsmanager.bsmanager.preview" && mutates_library {
+        if windows_integration::legacy_manager_running().await? {
+            return Err(serialized_error(
+                "Close legacy BSManager before changing shared game or content folders",
+                "LEGACY_MANAGER_RUNNING",
+            ));
+        }
+    }
+
     match channel {
         "import-version" => {
             let app_state = app.state::<AppState>();
@@ -484,7 +671,11 @@ async fn handle_request<R: Runtime>(
             maps::import_maps(app, window, response_channel, &args, cancelled).await
         }
         "get-version-playlists-details" => playlists::get_version_playlists(app, window, response_channel, &args, cancelled).await,
-        "install-playlist-file" => playlists::install_playlist(app, &args),
+        "install-playlist-file" => {
+            let app_state = app.state::<AppState>();
+            let _operation = app_state.library_operation.lock().await;
+            playlists::install_playlist(app, &args)
+        }
         "import-playlists" => {
             let app_state = app.state::<AppState>();
             let _operation = app_state.library_operation.lock().await;
@@ -537,18 +728,40 @@ async fn handle_request<R: Runtime>(
         }
         "get-version-models" => models::get_version_models(app, window, response_channel, &args, cancelled).await,
         "export-models" => models::export_models(app, window, response_channel, &args, cancelled).await,
-        "delete-models" => models::delete_models(app, window, response_channel, &args, cancelled).await,
+        "delete-models" => {
+            let app_state = app.state::<AppState>();
+            let _operation = app_state.library_operation.lock().await;
+            models::delete_models(app, window, response_channel, &args, cancelled).await
+        }
         "is-oculus-sideloaded-apps-enabled" => windows_integration::sideloaded_apps_enabled(),
         "enable-oculus-sideloaded-apps" => windows_integration::enable_sideloaded_apps(app).await,
         "vr-runtime.get-active" => Ok(windows_integration::active_vr_runtime(args.as_str())),
         "shortcut-launch-options" => shortcut_launch_options(app, window),
         "current-version" => Ok(json!(env!("CARGO_PKG_VERSION"))),
-        "get-available-update" => Ok(Value::Null),
-        "check-update" => Ok(json!(false)),
-        "download-update" | "install-update" => Err(serialized_error(
-            "Remote updates are disabled until a signed Tauri update endpoint is configured",
-            "UPDATES_DISABLED",
-        )),
+        "get-available-update" => {
+            let state = app.state::<AppState>();
+            let _operation = state.update_operation.lock().await;
+            let update = check_for_update(app).await?;
+            set_pending_update(app, update.clone()).await;
+            Ok(update.map(|update| json!({ "version": update.version })).unwrap_or(Value::Null))
+        }
+        "check-update" => {
+            let state = app.state::<AppState>();
+            let _operation = state.update_operation.lock().await;
+            let update = check_for_update(app).await?;
+            set_pending_update(app, update.clone()).await;
+            Ok(json!(update.is_some()))
+        }
+        "download-update" => {
+            let state = app.state::<AppState>();
+            let _operation = state.update_operation.lock().await;
+            download_update(app, window, response_channel, cancelled).await
+        }
+        "install-update" => {
+            let state = app.state::<AppState>();
+            let _operation = state.update_operation.lock().await;
+            install_update(app).await
+        }
         "get-supporters" => serde_json::from_str(SUPPORTERS)
             .map_err(|error| serialized_error(error.to_string(), "SUPPORTERS_READ_FAILED")),
         "bs-installer.folder-exists" => Ok(json!(install_directory(app).map_err(|error| serialized_error(error, "INSTALL_PATH_FAILED"))?.is_dir())),
@@ -1089,6 +1302,7 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_store::Builder::new().build())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .invoke_handler(tauri::generate_handler![ipc_send, register_protocol])
         .setup(|app| {

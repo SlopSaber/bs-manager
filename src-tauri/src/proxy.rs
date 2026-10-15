@@ -17,9 +17,13 @@ pub fn set_enabled(enabled: bool) {
     USE_SYSTEM_PROXY.store(enabled, Ordering::Relaxed);
 }
 
+pub fn is_enabled() -> bool {
+    USE_SYSTEM_PROXY.load(Ordering::Relaxed)
+}
+
 pub fn client_builder() -> reqwest::ClientBuilder {
     let builder = reqwest::Client::builder();
-    if USE_SYSTEM_PROXY.load(Ordering::Relaxed) {
+    if is_enabled() {
         builder
     } else {
         builder.no_proxy()
