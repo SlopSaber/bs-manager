@@ -279,13 +279,27 @@ async fn download_verified_mod(version: &Value, cancelled: &AtomicBool) -> Resul
     let client = crate::proxy::client_builder().connect_timeout(Duration::from_secs(20)).timeout(Duration::from_secs(180))
         .user_agent(format!("BSManager/{}", env!("CARGO_PKG_VERSION"))).build()
         .map_err(|error| serialized_error(error.to_string(), "MOD_DOWNLOAD_FAILED"))?;
-    let response = client.get(url).send().await
-        .and_then(reqwest::Response::error_for_status)
-        .map_err(|error| serialized_error(error.to_string(), "MOD_DOWNLOAD_FAILED"))?;
+    if cancelled.load(Ordering::Relaxed) {
+        return Err(serialized_error("Mod download was cancelled", "REQUEST_CANCELLED"));
+    }
+    let response = tokio::select! {
+        response = client.get(url).send() => response
+            .and_then(reqwest::Response::error_for_status)
+            .map_err(|error| serialized_error(error.to_string(), "MOD_DOWNLOAD_FAILED"))?,
+        _ = wait_for_cancellation(cancelled) => {
+            return Err(serialized_error("Mod download was cancelled", "REQUEST_CANCELLED"));
+        }
+    };
     let mut stream = response.bytes_stream();
     let mut bytes = Vec::new();
-    while let Some(chunk) = stream.next().await {
-        if cancelled.load(Ordering::Relaxed) { return Err(serialized_error("Mod download was cancelled", "REQUEST_CANCELLED")); }
+    loop {
+        let chunk = tokio::select! {
+            chunk = stream.next() => chunk,
+            _ = wait_for_cancellation(cancelled) => {
+                return Err(serialized_error("Mod download was cancelled", "REQUEST_CANCELLED"));
+            }
+        };
+        let Some(chunk) = chunk else { break; };
         bytes.extend_from_slice(&chunk.map_err(|error| serialized_error(error.to_string(), "MOD_DOWNLOAD_FAILED"))?);
     }
     let expected = version.get("contentHashes").and_then(Value::as_array).cloned().unwrap_or_default();
@@ -325,6 +339,12 @@ async fn download_verified_mod(version: &Value, cancelled: &AtomicBool) -> Resul
     match result {
         Ok(paths) => Ok((staging, paths)),
         Err(error) => { let _ = fs::remove_dir_all(staging); Err(error) }
+    }
+}
+
+async fn wait_for_cancellation(cancelled: &AtomicBool) {
+    while !cancelled.load(Ordering::Relaxed) {
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
 
