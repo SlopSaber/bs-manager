@@ -84,13 +84,28 @@ function Export-RegistryKey([string] $hiveName, [string] $relativeKey, [string] 
     return $true
 }
 
-function Restore-RegistryBackups([string[]] $backupFiles) {
-    foreach ($backupFile in $backupFiles) {
-        if (-not (Test-Path -LiteralPath $backupFile -PathType Leaf)) { continue }
+function Test-RegistryValueExists([string] $hiveName, [string] $relativeKey, [string] $valueName) {
+    $hive = if ($hiveName -eq "HKCU") { [Microsoft.Win32.RegistryHive]::CurrentUser } else { [Microsoft.Win32.RegistryHive]::LocalMachine }
+    $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey($hive, [Microsoft.Win32.RegistryView]::Default)
+    $key = $null
+    try {
+        $key = $base.OpenSubKey($relativeKey)
+        return ($null -ne $key) -and ($key.GetValueNames() -contains $valueName)
+    }
+    finally {
+        if ($null -ne $key) { $key.Dispose() }
+        $base.Dispose()
+    }
+}
+
+function Restore-RegistryBackups([object[]] $backupRecords) {
+    foreach ($backup in $backupRecords) {
+        if (-not (Test-Path -LiteralPath $backup.File -PathType Leaf)) { continue }
+        if (Test-RegistryValueExists $backup.Hive $backup.RequiredKey $backup.RequiredValue) { continue }
         $result = Start-Process -FilePath "$env:WINDIR\System32\reg.exe" `
-            -ArgumentList @("import", "`"$backupFile`"") -Wait -PassThru -NoNewWindow
+            -ArgumentList @("import", "`"$($backup.File)`"") -Wait -PassThru -NoNewWindow
         if ($result.ExitCode -ne 0) {
-            Write-Error "Could not restore registry backup $backupFile"
+            Write-Error "Could not restore registry backup $($backup.File)"
         }
     }
 }
@@ -133,7 +148,13 @@ try {
         foreach ($keyName in $registryKeys) {
             $backupFile = Join-Path $backupDirectory ("$hiveName-" + ($keyName -replace '[^A-Za-z0-9_.+-]', '_') + ".reg")
             if (Export-RegistryKey $hiveName "Software\Classes\$keyName" $backupFile) {
-                $registryBackups += $backupFile
+                $registryBackups += [pscustomobject]@{
+                    Hive = $hiveName
+                    Key = "Software\Classes\$keyName"
+                    RequiredKey = if ($keyName -eq ".bplist") { "Software\Classes\.bplist" } else { "Software\Classes\$keyName\shell\open\command" }
+                    RequiredValue = ""
+                    File = $backupFile
+                }
             }
         }
     }
@@ -149,7 +170,13 @@ try {
         if ([string]::IsNullOrWhiteSpace($progId) -or $progId.StartsWith(".")) { continue }
         $backupFile = Join-Path $backupDirectory ("$($root.Hive)-" + ($progId -replace '[^A-Za-z0-9_.+-]', '_') + ".reg")
         if (Export-RegistryKey $root.Hive "Software\Classes\$progId" $backupFile) {
-            $registryBackups += $backupFile
+            $registryBackups += [pscustomobject]@{
+                Hive = $root.Hive
+                Key = "Software\Classes\$progId"
+                RequiredKey = "Software\Classes\$progId\shell\open\command"
+                RequiredValue = ""
+                File = $backupFile
+            }
         }
     }
 
@@ -160,7 +187,9 @@ try {
         registryKey = $legacy.RegistryKey
         settingsPath = $settingsPath
         settingsBackup = $settingsBackup
-        registryBackups = $registryBackups
+        registryBackups = @($registryBackups | ForEach-Object {
+            [ordered]@{ hive = $_.Hive; key = $_.Key; requiredKey = $_.RequiredKey; file = $_.File }
+        })
     }
     $details | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $backupDirectory "migration.json") -Encoding UTF8
 

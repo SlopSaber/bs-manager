@@ -17,8 +17,8 @@ Signed remote updates are opt-in at compile time. Preview reads `BSM_TAURI_PREVI
 
 Current local installers compile successfully under Node 24.21.0 and are unsigned. All profiles keep Tauri's configured window list empty so startup can choose a target before creating any window: a supported protocol URL or `.bplist` opens its corresponding window without first creating the main window; otherwise the `auto-update` setting selects the launcher when a signed update source is configured, falling back to the main window when updates are disabled or unavailable. The generated NSIS script contains both preinstall and preuninstall hook call sites. The hook code was included in the installer builds, but neither installer has been executed; migration, registry restoration, and uninstall behavior still need user-led review:
 
-- Preview: `release/tauri/preview/BSManager-Preview-1.6.0-x64-setup.exe`, SHA-256 `7646c8e305ce164d101a7ad58f49de3553435be6aca7c694ee5b07cbff224326`.
-- Replacement: `release/tauri/replacement/BSManager-1.6.0-x64-setup.exe`, SHA-256 `5b0d9057640e04389a2744cf7c7846c36c2d1ec36ec3366d9e332cd6f0249539`.
+- Preview: `release/tauri/preview/BSManager-Preview-1.6.0-x64-setup.exe`, SHA-256 `c91da8a081654f5c1ffe30f48c10bb0a8d6d5f6d815780076191d6778060d698`.
+- Replacement: `release/tauri/replacement/BSManager-1.6.0-x64-setup.exe`, SHA-256 `b888fc0f4cd9aef626f790d1b12cd7aa273c0f937331ac92d51cb61510867fde`.
 
 ## Implemented in the Rust host
 
@@ -57,7 +57,7 @@ The complete route-by-route, event, window, settings, failure, installer, and vi
 
 ## Replacement rollback
 
-The replacement preinstall hook stores a timestamped backup under `%LOCALAPPDATA%\BSManager\migration-backups\`. `migration.json` lists the saved Electron `config.json` and protocol/file-association registry exports. The hook restores `config.json` if Electron's uninstaller removes it. Game libraries are not removed.
+The replacement preinstall hook stores a timestamped backup under `%LOCALAPPDATA%\BSManager\migration-backups\`. `migration.json` lists the saved Electron `config.json` and protocol/file-association registry exports. If Electron's uninstaller fails, the hook restores `config.json` when missing and restores only association command values that the uninstaller removed, leaving registrations that still exist untouched. Game libraries are not removed.
 
 If Electron uninstall succeeds but the Tauri install then fails, reinstall the retained Electron installer first. If settings are missing or damaged, restore the saved `config.json` to `%APPDATA%\bs-manager\config.json`. After Electron returns to its original install path, import the relevant registry exports listed in `migration.json` to restore prior protocol and `.bplist` handlers. Import HKCU exports as the same Windows user; HKLM exports may require elevation. Review each export before importing if another app has since claimed that handler.
 
