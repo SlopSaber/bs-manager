@@ -4,7 +4,6 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use tauri::{AppHandle, Emitter, Manager, Runtime, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
-use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_dialog::{DialogExt, FilePath};
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
@@ -24,6 +23,7 @@ mod beat_saver;
 mod maps;
 mod playlists;
 mod mods;
+mod protocols;
 
 const VERSION_LIBRARY: &str = include_str!("../../assets/jsons/bs-versions.json");
 const SUPPORTERS: &str = include_str!("../../assets/jsons/patreons.json");
@@ -640,15 +640,15 @@ async fn handle_request<R: Runtime>(
                 .map_err(|error| serialized_error(format!("Folder relink worker failed: {error}"), "LINK_FAILED"))?
         }
         "get-shared-folder" => Ok(json!(linker::shared_folder(app)?.to_string_lossy().to_string())),
-        "register-maps-deep-link" => set_protocols(app, &["beatsaver", "web+bsmap"], true),
-        "unregister-maps-deep-link" => set_protocols(app, &["beatsaver", "web+bsmap"], false),
-        "is-map-deep-links-enabled" => are_protocols_registered(app, &["beatsaver", "web+bsmap"]),
-        "register-playlists-deep-link" => set_protocols(app, &["bsplaylist"], true),
-        "unregister-playlists-deep-link" => set_protocols(app, &["bsplaylist"], false),
-        "is-playlists-deep-links-enabled" => are_protocols_registered(app, &["bsplaylist"]),
-        "register-models-deep-link" => set_protocols(app, &["modelsaber"], true),
-        "unregister-models-deep-link" => set_protocols(app, &["modelsaber"], false),
-        "is-models-deep-links-enabled" => are_protocols_registered(app, &["modelsaber"]),
+        "register-maps-deep-link" => set_protocols(app, window, &["beatsaver", "web+bsmap"], true),
+        "unregister-maps-deep-link" => set_protocols(app, window, &["beatsaver", "web+bsmap"], false),
+        "is-map-deep-links-enabled" => are_protocols_registered(app, window, &["beatsaver", "web+bsmap"]),
+        "register-playlists-deep-link" => set_protocols(app, window, &["bsplaylist"], true),
+        "unregister-playlists-deep-link" => set_protocols(app, window, &["bsplaylist"], false),
+        "is-playlists-deep-links-enabled" => are_protocols_registered(app, window, &["bsplaylist"]),
+        "register-models-deep-link" => set_protocols(app, window, &["modelsaber"], true),
+        "unregister-models-deep-link" => set_protocols(app, window, &["modelsaber"], false),
+        "is-models-deep-links-enabled" => are_protocols_registered(app, window, &["modelsaber"]),
         "close-window" => { window.close().map_err(|error| serialized_error(error.to_string(), "WINDOW_FAILED"))?; Ok(Value::Null) }
         "minimise-window" => { window.minimize().map_err(|error| serialized_error(error.to_string(), "WINDOW_FAILED"))?; Ok(Value::Null) }
         "maximise-window" => { window.maximize().map_err(|error| serialized_error(error.to_string(), "WINDOW_FAILED"))?; Ok(Value::Null) }
@@ -779,10 +779,10 @@ async fn ipc_send<R: Runtime>(app: AppHandle<R>, window: WebviewWindow<R>, chann
 
 #[tauri::command]
 fn register_protocol<R: Runtime>(app: AppHandle<R>, window: WebviewWindow<R>, protocol: String) -> Result<bool, String> {
-    if !is_application_window(window.label()) { return Err("Protocol registration is unavailable in this window".to_owned()); }
+    if window.label() != "main" { return Err("Protocol registration is only available in the main window".to_owned()); }
     let supported = ["bsmanager", "beatsaver", "web+bsmap", "bsplaylist", "modelsaber"];
     if !supported.contains(&protocol.as_str()) { return Err("Unsupported BSManager protocol".to_owned()); }
-    app.deep_link().register(&protocol).map_err(|error| error.to_string())?;
+    protocols::set(&app, &protocol, true)?;
     Ok(true)
 }
 
@@ -914,19 +914,25 @@ fn shortcut_launch_options<R: Runtime>(
     Ok(result)
 }
 
-fn set_protocols<R: Runtime>(app: &AppHandle<R>, protocols: &[&str], register: bool) -> Result<Value, SerializedError> {
+fn set_protocols<R: Runtime>(app: &AppHandle<R>, window: &WebviewWindow<R>, protocols: &[&str], register: bool) -> Result<Value, SerializedError> {
+    if window.label() != "main" {
+        return Err(serialized_error("Protocol settings are only available in the main window", "WINDOW_NOT_ALLOWED"));
+    }
     for protocol in protocols {
-        let result = if register { app.deep_link().register(protocol) } else { app.deep_link().unregister(protocol) };
-        result.map_err(|error| serialized_error(error.to_string(), "PROTOCOL_REGISTRATION_FAILED"))?;
+        protocols::set(app, protocol, register)
+            .map_err(|error| serialized_error(error, "PROTOCOL_REGISTRATION_FAILED"))?;
     }
     Ok(json!(true))
 }
 
-fn are_protocols_registered<R: Runtime>(app: &AppHandle<R>, protocols: &[&str]) -> Result<Value, SerializedError> {
+fn are_protocols_registered<R: Runtime>(app: &AppHandle<R>, window: &WebviewWindow<R>, protocols: &[&str]) -> Result<Value, SerializedError> {
+    if window.label() != "main" {
+        return Err(serialized_error("Protocol settings are only available in the main window", "WINDOW_NOT_ALLOWED"));
+    }
     let mut registered = true;
     for protocol in protocols {
-        registered &= app.deep_link().is_registered(protocol)
-            .map_err(|error| serialized_error(error.to_string(), "PROTOCOL_QUERY_FAILED"))?;
+        registered &= protocols::is_registered(app, protocol)
+            .map_err(|error| serialized_error(error, "PROTOCOL_QUERY_FAILED"))?;
     }
     Ok(json!(registered))
 }
