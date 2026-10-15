@@ -29,18 +29,19 @@ pub async fn handle<R: Runtime>(
     cancelled: Arc<AtomicBool>,
 ) -> Result<Value, SerializedError> {
     match channel {
-        "bs-mods.get-available-mods" => get_available_mods(args).await,
-        "bs-mods.get-installed-mods" => get_installed_mods(app, args).await,
+        "bs-mods.get-available-mods" => get_available_mods(args, &cancelled).await,
+        "bs-mods.get-installed-mods" => get_installed_mods(app, args, &cancelled).await,
         "bs-mods.import-mods" => import_mods(app, window, response_channel, args, cancelled).await,
         "bs-mods.install-mods" => install_mods(app, window, response_channel, args, cancelled).await,
         "bs-mods.uninstall-mods" => uninstall_mods(app, window, response_channel, args, cancelled).await,
         "bs-mods.uninstall-all-mods" => uninstall_all_mods(app, window, response_channel, args, cancelled).await,
-        "bs-mods.beatmods-up" => Ok(json!(is_up().await)),
+        "bs-mods.beatmods-up" => Ok(json!(is_up(&cancelled).await)),
         _ => Err(serialized_error("Unknown mod-management route", "UNKNOWN_ROUTE")),
     }
 }
 
-async fn get_available_mods(version: &Value) -> Result<Value, SerializedError> {
+async fn get_available_mods(version: &Value, cancelled: &AtomicBool) -> Result<Value, SerializedError> {
+    if cancelled.load(Ordering::Relaxed) { return Err(serialized_error("Mod lookup was cancelled", "REQUEST_CANCELLED")); }
     let game_version = version.get("BSVersion").and_then(Value::as_str)
         .ok_or_else(|| serialized_error("Beat Saber version is missing", "INVALID_VERSION"))?;
     let key = game_version.to_owned();
@@ -56,7 +57,8 @@ async fn get_available_mods(version: &Value) -> Result<Value, SerializedError> {
         .append_pair("gameVersion", game_version)
         .append_pair("gameName", "BeatSaber")
         .append_pair("platform", platform);
-    let response = get_json(url).await?;
+    let response = get_json(url, cancelled).await?;
+    if cancelled.load(Ordering::Relaxed) { return Err(serialized_error("Mod lookup was cancelled", "REQUEST_CANCELLED")); }
     let mods = response.get("mods").and_then(Value::as_array).into_iter().flatten()
         .filter_map(|item| Some(json!({ "mod": item.get("mod")?, "version": item.get("latest")? })))
         .collect::<Vec<_>>();
@@ -67,7 +69,7 @@ async fn get_available_mods(version: &Value) -> Result<Value, SerializedError> {
     Ok(json!(mods))
 }
 
-async fn get_installed_mods<R: Runtime>(app: &AppHandle<R>, version: &Value) -> Result<Value, SerializedError> {
+async fn get_installed_mods<R: Runtime>(app: &AppHandle<R>, version: &Value, cancelled: &AtomicBool) -> Result<Value, SerializedError> {
     let root = versions::version_path(app, version)?;
     let bsipa_path = root.join("Beat Saber_Data/Managed/IPA.Injector.dll");
     let mut candidates = Vec::new();
@@ -81,9 +83,10 @@ async fn get_installed_mods<R: Runtime>(app: &AppHandle<R>, version: &Value) -> 
     }
     let lookups = candidates.iter().map(|(path, _, _)| async move {
         let hash = md5_file(path).await?;
-        Ok::<_, SerializedError>((lookup_hash(&hash).await, path.clone()))
+        Ok::<_, SerializedError>((lookup_hash(&hash, cancelled).await, path.clone()))
     });
     let lookup_results = futures_util::future::join_all(lookups).await;
+    if cancelled.load(Ordering::Relaxed) { return Err(serialized_error("Mod lookup was cancelled", "REQUEST_CANCELLED")); }
     let mut found = HashMap::<String, Value>::new();
     let mut manifest_matches = Vec::<Value>::new();
     for (candidate, lookup) in candidates.into_iter().zip(lookup_results) {
@@ -374,9 +377,9 @@ async fn uninstall_all_mods<R: Runtime>(
     cancelled: Arc<AtomicBool>,
 ) -> Result<Value, SerializedError> {
     if cancelled.load(Ordering::Relaxed) { return Err(serialized_error("Mod removal was cancelled", "REQUEST_CANCELLED")); }
-    let available = get_available_mods(version).await?.as_array().cloned().unwrap_or_default();
+    let available = get_available_mods(version, &cancelled).await?.as_array().cloned().unwrap_or_default();
     if cancelled.load(Ordering::Relaxed) { return Err(serialized_error("Mod removal was cancelled", "REQUEST_CANCELLED")); }
-    let installed = get_installed_mods(app, version).await?.as_array().cloned().unwrap_or_default();
+    let installed = get_installed_mods(app, version, &cancelled).await?.as_array().cloned().unwrap_or_default();
     let mods = installed.into_iter().filter_map(|installed| {
         let mod_id = installed.get("modId")?;
         available.iter().find(|available| available.pointer("/mod/id") == Some(mod_id))
@@ -528,12 +531,12 @@ async fn md5_file(path: &Path) -> Result<String, SerializedError> {
     Ok(format!("{:x}", context.compute()))
 }
 
-async fn lookup_hash(hash: &str) -> Option<Value> {
+async fn lookup_hash(hash: &str, cancelled: &AtomicBool) -> Option<Value> {
     if let Some(cached) = MODS_BY_HASH.get_or_init(Default::default).lock().ok().and_then(|cache| cache.get(hash).cloned()) {
         return Some(cached);
     }
     let url = reqwest::Url::parse_with_params(&format!("{BEATMODS}/api/hashlookup"), &[("hash", hash)]).ok()?;
-    let response = get_json(url).await.ok()?;
+    let response = get_json(url, cancelled).await.ok()?;
     let versions = response.get("modVersions").and_then(Value::as_array)?;
     update_hash_cache(versions.iter().cloned());
     versions.first().cloned()
@@ -554,19 +557,58 @@ fn update_hash_cache(versions: impl IntoIterator<Item = Value>) {
     }
 }
 
-async fn get_json(url: reqwest::Url) -> Result<Value, SerializedError> {
-    let response = crate::proxy::client_builder().connect_timeout(Duration::from_secs(20)).timeout(Duration::from_secs(30))
+async fn get_json(url: reqwest::Url, cancelled: &AtomicBool) -> Result<Value, SerializedError> {
+    let client = crate::proxy::client_builder().connect_timeout(Duration::from_secs(20)).timeout(Duration::from_secs(30))
         .user_agent(format!("BSManager/{}", env!("CARGO_PKG_VERSION"))).build()
-        .map_err(|error| serialized_error(error.to_string(), "BEATMODS_REQUEST_FAILED"))?
-        .get(url).send().await.and_then(reqwest::Response::error_for_status)
         .map_err(|error| serialized_error(error.to_string(), "BEATMODS_REQUEST_FAILED"))?;
-    let body = response.text().await.map_err(|error| serialized_error(error.to_string(), "BEATMODS_RESPONSE_FAILED"))?;
-    serde_json::from_str(&body).map_err(|error| serialized_error(error.to_string(), "BEATMODS_RESPONSE_FAILED"))
+    let mut request = client.get(url);
+    for attempt in 0..4 {
+        if cancelled.load(Ordering::Relaxed) { return Err(serialized_error("BeatMods request was cancelled", "REQUEST_CANCELLED")); }
+        let retry = if attempt < 3 { request.try_clone() } else { None };
+        let response = tokio::select! {
+            response = request.send() => response,
+            _ = wait_for_cancellation(cancelled) => {
+                return Err(serialized_error("BeatMods request was cancelled", "REQUEST_CANCELLED"));
+            }
+        };
+        match response {
+            Ok(response) if response.status().is_success() => {
+                let body = tokio::select! {
+                    body = response.text() => body.map_err(|error| serialized_error(error.to_string(), "BEATMODS_RESPONSE_FAILED"))?,
+                    _ = wait_for_cancellation(cancelled) => {
+                        return Err(serialized_error("BeatMods request was cancelled", "REQUEST_CANCELLED"));
+                    }
+                };
+                return serde_json::from_str(&body).map_err(|error| serialized_error(error.to_string(), "BEATMODS_RESPONSE_FAILED"));
+            }
+            Ok(response) if attempt < 3 && (response.status().as_u16() == 429 || response.status().is_server_error()) && retry.is_some() => {
+                request = retry.expect("checked retry request");
+                tokio::select! {
+                    _ = tokio::time::sleep(Duration::from_millis(250 * (1 << attempt))) => {},
+                    _ = wait_for_cancellation(cancelled) => {
+                        return Err(serialized_error("BeatMods request was cancelled", "REQUEST_CANCELLED"));
+                    }
+                }
+            }
+            Ok(response) => return Err(serialized_error(format!("BeatMods returned HTTP {}", response.status()), "BEATMODS_REQUEST_FAILED")),
+            Err(error) if attempt < 3 && (error.is_timeout() || error.is_connect()) && retry.is_some() => {
+                request = retry.expect("checked retry request");
+                tokio::select! {
+                    _ = tokio::time::sleep(Duration::from_millis(250 * (1 << attempt))) => {},
+                    _ = wait_for_cancellation(cancelled) => {
+                        return Err(serialized_error("BeatMods request was cancelled", "REQUEST_CANCELLED"));
+                    }
+                }
+            }
+            Err(error) => return Err(serialized_error(error.to_string(), "BEATMODS_REQUEST_FAILED")),
+        }
+    }
+    Err(serialized_error("BeatMods request failed", "BEATMODS_REQUEST_FAILED"))
 }
 
-async fn is_up() -> bool {
+async fn is_up(cancelled: &AtomicBool) -> bool {
     let Ok(url) = reqwest::Url::parse(&format!("{BEATMODS}/api/status")) else { return false; };
-    get_json(url).await.is_ok()
+    get_json(url, cancelled).await.is_ok()
 }
 
 fn emit_progress<R: Runtime>(
