@@ -16,6 +16,7 @@ mod oculus;
 mod stores;
 mod steam;
 mod versions;
+mod windows_integration;
 
 const VERSION_LIBRARY: &str = include_str!("../../assets/jsons/bs-versions.json");
 const SUPPORTERS: &str = include_str!("../../assets/jsons/patreons.json");
@@ -380,6 +381,9 @@ async fn handle_request<R: Runtime>(
             oculus::download(app, window, response_channel, &args, cancelled).await
         }
         "bs-oculus-stop-download" => Ok(oculus::stop_download(app)),
+        "is-oculus-sideloaded-apps-enabled" => windows_integration::sideloaded_apps_enabled(),
+        "enable-oculus-sideloaded-apps" => windows_integration::enable_sideloaded_apps(app).await,
+        "vr-runtime.get-active" => Ok(windows_integration::active_vr_runtime(args.as_str())),
         "current-version" => Ok(json!(env!("CARGO_PKG_VERSION"))),
         "get-available-update" => Ok(Value::Null),
         "check-update" => Ok(json!(false)),
