@@ -210,7 +210,7 @@ fn webview_data_directory<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, Ser
         .map_err(|error| serialized_error(error.to_string(), "META_SESSION_STORAGE_FAILED"))
 }
 
-fn valid_token(token: &str) -> bool {
+pub fn valid_token(token: &str) -> bool {
     if token.is_empty() || token.chars().any(|character| matches!(character, '%' | '|' | ':'))
         || (!token.starts_with("FRL") && !token.starts_with("OC"))
     {

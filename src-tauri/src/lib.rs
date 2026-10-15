@@ -12,6 +12,7 @@ use tauri_plugin_opener::OpenerExt;
 mod library;
 mod linker;
 mod meta;
+mod oculus;
 mod stores;
 mod steam;
 mod versions;
@@ -27,6 +28,7 @@ struct AppState {
     window_arguments: Mutex<HashMap<String, Value>>,
     library_operation: tokio::sync::Mutex<()>,
     meta_login: tokio::sync::Mutex<()>,
+    oculus_download: Mutex<Option<oculus::OculusControl>>,
     active_requests: Mutex<HashMap<String, Arc<AtomicBool>>>,
     steam_download: Mutex<Option<steam::SteamControl>>,
 }
@@ -366,6 +368,18 @@ async fn handle_request<R: Runtime>(
             meta::delete_session(app).await
         }
         "meta-session-exists" => Ok(meta::session_exists(app).await),
+        "bs-oculus-download" => {
+            {
+                let active = app.state::<AppState>();
+                if active.oculus_download.lock().is_ok_and(|download| download.is_some()) {
+                    return Err(serialized_error("Already downloading", "ALREADY_DOWNLOADING"));
+                }
+            }
+            let app_state = app.state::<AppState>();
+            let _operation = app_state.library_operation.lock().await;
+            oculus::download(app, window, response_channel, &args, cancelled).await
+        }
+        "bs-oculus-stop-download" => Ok(oculus::stop_download(app)),
         "current-version" => Ok(json!(env!("CARGO_PKG_VERSION"))),
         "get-available-update" => Ok(Value::Null),
         "check-update" => Ok(json!(false)),
@@ -649,7 +663,7 @@ async fn ipc_send<R: Runtime>(app: AppHandle<R>, window: WebviewWindow<R>, chann
             log::warn!("Windows Tauri one-way route '{channel}' failed: {}", error.message);
         }
     } else {
-        ipc_response(&window, &channel, &request, result, matches!(channel.as_str(), "import-version" | "download-bs-version" | "auto-download-bs-version" | "download-bs-version-qr"));
+        ipc_response(&window, &channel, &request, result, matches!(channel.as_str(), "import-version" | "download-bs-version" | "auto-download-bs-version" | "download-bs-version-qr" | "bs-oculus-download"));
     }
 }
 
