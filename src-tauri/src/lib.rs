@@ -20,6 +20,7 @@ mod stores;
 mod steam;
 mod versions;
 mod windows_integration;
+mod beat_saver;
 
 const VERSION_LIBRARY: &str = include_str!("../../assets/jsons/bs-versions.json");
 const SUPPORTERS: &str = include_str!("../../assets/jsons/patreons.json");
@@ -400,6 +401,8 @@ async fn handle_request<R: Runtime>(
         "create-launch-shortcut" => Ok(json!(shortcuts::create_launch_shortcut(app, &args).await)),
         "ms-get-model-by-id" => Ok(models::get_model_by_id(&args).await),
         "search-models" => models::search_models(&args).await,
+        "bsv-search-map" | "bsv-get-map-details-from-hashs" | "bsv-get-map-details-by-id" |
+        "bsv-search-playlist" | "bsv-get-playlist-details-by-id" => beat_saver::dispatch(channel, &args).await,
         "download-model" => {
             let app_state = app.state::<AppState>();
             let _operation = app_state.library_operation.lock().await;
