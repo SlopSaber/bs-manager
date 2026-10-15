@@ -4,7 +4,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
-use tauri::{AppHandle, Emitter, Manager, Runtime, WebviewUrl, WebviewWindow, WebviewWindowBuilder, window::{ProgressBarState, ProgressBarStatus}};
+use tauri::{AppHandle, Emitter, Manager, Runtime, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent, window::{ProgressBarState, ProgressBarStatus}};
 use tauri_plugin_updater::{Update, UpdaterExt};
 use regex::Regex;
 use tauri_plugin_dialog::{DialogExt, FilePath};
@@ -46,7 +46,7 @@ struct AppState {
     meta_login: tokio::sync::Mutex<()>,
     oculus_download: Mutex<Option<oculus::OculusControl>>,
     launch_in_progress: AtomicBool,
-    active_requests: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    active_requests: Mutex<HashMap<String, ActiveRequest>>,
     pending_update: tokio::sync::Mutex<Option<PendingUpdate>>,
     update_operation: tokio::sync::Mutex<()>,
     steam_download: Mutex<Option<steam::SteamControl>>,
@@ -56,6 +56,11 @@ struct AppState {
 struct PendingUpdate {
     update: Update,
     downloaded: Option<Vec<u8>>,
+}
+
+struct ActiveRequest {
+    window_label: String,
+    cancelled: Arc<AtomicBool>,
 }
 
 #[derive(Default)]
@@ -468,7 +473,30 @@ fn create_window<R: Runtime>(app: &AppHandle<R>, template: &str, args: Option<Va
         .visible(true)
         .build()
         .map_err(|error| format!("Could not open {template}: {error}"))?;
+    if let Some(window) = app.get_webview_window(label) {
+        let lifecycle_app = app.clone();
+        let lifecycle_label = label.to_owned();
+        window.on_window_event(move |event| {
+            if matches!(event, WindowEvent::Destroyed) {
+                cancel_window_requests(&lifecycle_app, &lifecycle_label);
+            }
+        });
+    }
     Ok(())
+}
+
+fn cancel_window_requests<R: Runtime>(app: &AppHandle<R>, label: &str) {
+    let state = app.state::<AppState>();
+    if let Ok(mut requests) = state.active_requests.lock() {
+        requests.retain(|_, request| {
+            if request.window_label == label {
+                request.cancelled.store(true, Ordering::Relaxed);
+                false
+            } else {
+                true
+            }
+        });
+    }
 }
 
 fn unwrap_request(value: &Value) -> IpcRequest {
@@ -1075,8 +1103,12 @@ async fn ipc_send<R: Runtime>(app: AppHandle<R>, window: WebviewWindow<R>, chann
     if let Some(response_id) = channel.strip_suffix("_teardown") {
         let state = app.state::<AppState>();
         if let Ok(mut requests) = state.active_requests.lock() {
-            if let Some(cancelled) = requests.remove(response_id) {
-                cancelled.store(true, Ordering::Relaxed);
+            if requests.get(response_id).is_some_and(|request| request.window_label == window.label()) {
+                if let Some(request) = requests.remove(response_id) {
+                    request.cancelled.store(true, Ordering::Relaxed);
+                }
+            } else if requests.contains_key(response_id) {
+                log::warn!("Rejected request cancellation from non-originating window '{}'", window.label());
             }
         }
         return;
@@ -1088,7 +1120,10 @@ async fn ipc_send<R: Runtime>(app: AppHandle<R>, window: WebviewWindow<R>, chann
     if let Some(response_id) = &request.responce_channel {
         let state = app.state::<AppState>();
         if let Ok(mut requests) = state.active_requests.lock() {
-            requests.insert(response_id.clone(), cancelled.clone());
+            requests.insert(response_id.clone(), ActiveRequest {
+                window_label: window.label().to_owned(),
+                cancelled: cancelled.clone(),
+            });
         }
     }
     let result = handle_request(
@@ -1185,7 +1220,6 @@ fn handle_launch_argument<R: Runtime>(app: &AppHandle<R>, argument: &str) -> boo
                     Err(error) => { log::warn!("Could not open deep-link window: {error}"); false }
                 };
             } else {
-                let _ = app.emit("app-url", argument.to_owned());
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.show();
                     let _ = window.set_focus();

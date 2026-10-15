@@ -17,8 +17,8 @@ Signed remote updates are opt-in at compile time. Preview reads `BSM_TAURI_PREVI
 
 Current local installers compile successfully under Node 24.21.0 and are unsigned. All profiles keep Tauri's configured window list empty so startup can choose a target before creating any window: a supported protocol URL or `.bplist` opens its corresponding window without first creating the main window; otherwise the `auto-update` setting selects the launcher when a signed update source is configured, falling back to the main window when updates are disabled or unavailable. The generated NSIS script contains both preinstall and preuninstall hook call sites. The hook code was included in the installer builds, but neither installer has been executed; migration, registry restoration, and uninstall behavior still need user-led review:
 
-- Preview: `release/tauri/preview/BSManager-Preview-1.6.0-x64-setup.exe`, SHA-256 `9ca291f0f8a1fddd6c625886606a94047281cd6ac9b75c2fc782963b5236936c`.
-- Replacement: `release/tauri/replacement/BSManager-1.6.0-x64-setup.exe`, SHA-256 `8a7b54b329801c9a1574b0750d5c7aac9bcd3246f50458874e36f4f597757197`.
+- Preview: `release/tauri/preview/BSManager-Preview-1.6.0-x64-setup.exe`, SHA-256 `834d226046feff1080259390de03e180d002629ef2db51fe46f397cd72c26660`.
+- Replacement: `release/tauri/replacement/BSManager-1.6.0-x64-setup.exe`, SHA-256 `6623c9631baba64ce3db782028f289ed2bf6668905e80910ffba17b47bb60fdc`.
 
 ## Implemented in the Rust host
 
@@ -32,16 +32,18 @@ Current local installers compile successfully under Node 24.21.0 and are unsigne
 - BeatMods availability and health routes; installed-mod discovery, including library files matched to manifests, DLL/ZIP import, download and content-hash validation, installation, removal, and remove-all. Archive member paths reject traversal and symbolic links. IPA execution and network cancellation still need runtime review.
 - Tauri updater checks use profile-specific endpoint/public-key build settings. Downloads stream progress to the requesting window, support request cancellation, verify signatures before installation, and install through the Tauri Windows updater. Updates stay disabled when signed profile settings are absent. Taskbar progress follows renderer progress on the originating window.
 - Tauri logs use info level and redact registered secret strings plus Oculus token patterns before writing to any target. Renderer `add-filter-string` and `add-filter-pattern` routes update the shared formatter filters.
-- Static configuration commands preserve unrecognized fields during file round trips. The system-proxy setting disables OS proxy use by default and applies Windows proxy settings to newly created Rust HTTP clients when enabled, including after a settings change. Request streaming and cancellation are bound to the originating window.
+- Static configuration commands preserve unrecognized fields during file round trips. The system-proxy setting disables OS proxy use by default and applies Windows proxy settings to newly created Rust HTTP clients when enabled, including after a settings change. Request streaming and cancellation are bound to the originating window; window destruction cancels that window's outstanding requests, and teardown from another window is rejected.
 
 These routes compile. Their runtime behavior has not yet passed the user-led acceptance scenarios.
 
 ## Windows parity checklist
 
+The complete route-by-route, event, window, settings, failure, installer, and visual review matrix is in [the Windows parity checklist](tauri-windows-parity-checklist.md). Route entries show source coverage; unchecked boxes require user-led runtime review.
+
 - [x] Renderer contract type-check and production build include all six entry pages: main, update launcher, shortcut launcher, and map, playlist, and model one-click windows.
 - [x] Source inventory maps every non-Linux route in `src/shared/models/ipc/ipc-routes.ts` to the Rust dispatcher or a delegated Rust handler. Linux Proton routes remain outside this Windows rewrite.
 - [x] Preview and replacement x64 NSIS profiles compile and emit local installer artifacts.
-- [ ] Exercise every route's result, progress, error, cancellation, and event behavior in the Windows app.
+- [ ] Exercise every route's result, progress, error, cancellation, and event behavior in the Windows app; track each in the linked matrix.
 - [ ] Review every settings control, dialog, window lifecycle, file-drop target, deep link, shortcut, and library operation against the Electron baseline.
 - [ ] Complete installer migration/recovery checks and 100%, 125%, and 150% visual comparisons across themes and window sizes.
 

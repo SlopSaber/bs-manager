@@ -1,0 +1,222 @@
+# Windows Tauri parity review checklist
+
+This checklist distinguishes source coverage from verified behavior. Route entries are present in the Windows Tauri dispatcher or delegated Rust handler; each runtime item remains unchecked until reviewed in the packaged Windows app against the Electron baseline. This is a user-led review record, not a claim that compilation proves parity.
+
+## IPC routes
+
+Review each route's payload shape, result/error behavior, progress sequence, cancellation where applicable, and effects on the correct library/profile. One-way routes should be checked for their expected side effects and error logging.
+
+### Download and authentication
+
+- [ ] `import-version`
+- [ ] `auto-download-bs-version`
+- [ ] `download-bs-version`
+- [ ] `download-bs-version-qr`
+- [ ] `stop-download-bs-version`
+- [ ] `send-input-bs-download`
+- [ ] `bs-oculus-download`
+- [ ] `bs-oculus-stop-download`
+- [ ] `login-with-meta`
+- [ ] `delete-meta-session`
+- [ ] `meta-session-exists`
+
+### BeatSaver API
+
+- [ ] `bsv-search-map`
+- [ ] `bsv-get-map-details-from-hashs`
+- [ ] `bsv-get-map-details-by-id`
+- [ ] `bsv-search-playlist`
+- [ ] `bsv-get-playlist-details-by-id`
+
+### Setup and preview import
+
+- [ ] `bs-installer.folder-exists`
+- [ ] `bs-installer.default-install-path`
+- [ ] `bs-installer.install-path`
+- [ ] `bs-installer.set-install-path`
+- [ ] `preview.legacy-settings-import-needed`
+- [ ] `preview.import-legacy-settings`
+- [ ] `preview.skip-legacy-settings-import`
+
+### Launch and shortcuts
+
+- [ ] `create-launch-shortcut`
+- [ ] `bs-launch.need-start-as-admin`
+- [ ] `bs-launch.launch`
+- [ ] `shortcut-launch-options`
+
+### Maps
+
+- [ ] `load-version-maps`
+- [ ] `delete-maps`
+- [ ] `export-maps`
+- [ ] `bs-maps.import-maps`
+- [ ] `bs-maps.download-map`
+- [ ] `last-downloaded-map`
+- [ ] `one-click-install-map`
+- [ ] `register-maps-deep-link`
+- [ ] `unregister-maps-deep-link`
+- [ ] `is-map-deep-links-enabled`
+- [ ] `get-maps-info-from-cache`
+
+### Models
+
+- [ ] `one-click-install-model`
+- [ ] `register-models-deep-link`
+- [ ] `unregister-models-deep-link`
+- [ ] `is-models-deep-links-enabled`
+- [ ] `download-model`
+- [ ] `get-version-models`
+- [ ] `export-models`
+- [ ] `delete-models`
+
+### Mods
+
+- [ ] `bs-mods.get-available-mods`
+- [ ] `bs-mods.get-installed-mods`
+- [ ] `bs-mods.import-mods`
+- [ ] `bs-mods.install-mods`
+- [ ] `bs-mods.uninstall-mods`
+- [ ] `bs-mods.uninstall-all-mods`
+- [ ] `bs-mods.beatmods-up`
+
+### Playlists
+
+- [ ] `one-click-install-playlist`
+- [ ] `register-playlists-deep-link`
+- [ ] `unregister-playlists-deep-link`
+- [ ] `is-playlists-deep-links-enabled`
+- [ ] `download-playlist`
+- [ ] `get-version-playlists-details`
+- [ ] `delete-playlist`
+- [ ] `export-playlists`
+- [ ] `import-playlists`
+- [ ] `install-playlist-file`
+
+### Versions and library folders
+
+- [ ] `bs.uninstall`
+- [ ] `bs-version.get-version-dict`
+- [ ] `bs-version.installed-versions`
+- [ ] `bs-version.open-folder`
+- [ ] `bs-version.edit`
+- [ ] `bs-version.clone`
+- [ ] `get-version-full-path`
+- [ ] `full-version-path-to-relative`
+- [ ] `get-linked-folders`
+- [ ] `link-version-folder-action`
+- [ ] `is-version-folder-linked`
+- [ ] `relink-all-versions-folders`
+- [ ] `get-shared-folder`
+
+### Updates
+
+- [ ] `download-update`
+- [ ] `check-update`
+- [ ] `get-available-update`
+- [ ] `install-update`
+
+### ModelSaber
+
+- [ ] `ms-get-model-by-id`
+- [ ] `search-models`
+
+### OS and window controls
+
+- [ ] `new-window`
+- [ ] `open-dialog`
+- [ ] `choose-folder`
+- [ ] `choose-file`
+- [ ] `choose-image`
+- [ ] `window.progression`
+- [ ] `save-file`
+- [ ] `current-version`
+- [ ] `open-logs`
+- [ ] `notify-system`
+- [ ] `view-path-in-explorer`
+- [ ] `restart-app`
+- [ ] `close-window`
+- [ ] `maximise-window`
+- [ ] `minimise-window`
+- [ ] `unmaximise-window`
+- [ ] `open-window-then-close-all`
+- [ ] `open-window-or-focus`
+
+### Supporters and configuration
+
+- [ ] `get-supporters`
+- [ ] `static-configuration.get`
+- [ ] `static-configuration.set`
+- [ ] `static-configuration.delete`
+- [ ] `is-oculus-sideloaded-apps-enabled`
+- [ ] `enable-oculus-sideloaded-apps`
+- [ ] `vr-runtime.get-active`
+
+Linux Proton routes are intentionally outside this Windows-only rewrite: `linux.set-proton-folder`, `linux.verify-proton-folder`, and `linux.get-wine-prefix-path`.
+
+## Events and request streams
+
+- [ ] Response channel carries every progress/result item in order and preserves serialized field names and large manifest IDs.
+- [ ] Response channel `_complete` closes observable after final value; error channel `_error` preserves message and code.
+- [ ] `_teardown` cancels work only for originating window; closing that window cancels its outstanding work and releases request entries.
+- [ ] Window arguments reach the intended app window on cold start, warm open, and reuse of an existing window.
+- [ ] `desktop-files-dropped` reports native file paths to the correct window and preserves drop target semantics.
+- [ ] Launch stream preserves `STEAM_LAUNCHING`, `STEAM_LAUNCHED`, `BS_LAUNCHING`, and `UNABLE_TO_LAUNCH_STEAM` payload behavior.
+- [ ] Native dialogs, notifications, progress, external links, and local media URLs match renderer expectations.
+- [ ] Remote Meta authentication and cookie-cleaner webviews cannot invoke app commands; their navigation, cookie, timeout, and destruction flows work.
+
+## Windows and auxiliary windows
+
+- [ ] Main window: 1080×720 default, 900×500 minimum, frameless controls, resize/maximize/restore, drag region, startup focus.
+- [ ] Update launcher: 380×500 fixed; update state, download progress, cancel, close, and reopen behavior.
+- [ ] Map one-click window: 350×400 fixed; deep-link payload and installation result.
+- [ ] Playlist one-click window: 350×400 fixed; deep-link and `.bplist` payloads.
+- [ ] Model one-click window: 350×400 fixed; deep-link payload and installation result.
+- [ ] Shortcut launcher: 600×500 default, 600×300 minimum height; launch arguments and close behavior.
+- [ ] Every app window has correct command capability; closing any window cleans up its operations and listeners.
+- [ ] Startup with each supported protocol and `.bplist` opens correct window without a stray main window; warm-instance routing behaves the same.
+
+## Settings controls
+
+- [ ] Steam remembered-session logout and login state.
+- [ ] Meta remembered-session logout and login state.
+- [ ] Default download store: Steam, Meta/Oculus, and ask each time.
+- [ ] Theme: dark, light, and operating-system preference.
+- [ ] First and second custom colors, including reset-to-default.
+- [ ] Installation path edit, browse, validation, apply, and move existing installation.
+- [ ] Deep-link selection: all, Maps, Playlists plus `.bplist`, and Models; registration changes persist and uninstall restores only registrations still owned by profile.
+- [ ] Language selection and persistence.
+- [ ] Supporter list visibility; Patreon, Discord, Twitter, GitHub, feature request, bug report, and open logs actions.
+- [ ] Auto-update preference and disabled-state behavior when signed profile endpoint/key are absent.
+- [ ] Close BSManager on launch, hardware acceleration, symlink use, and system proxy settings.
+- [ ] Settings retain unknown configuration fields through read/write and survive app restart.
+
+## Feature and failure scenarios
+
+- [ ] Steam password, QR, Steam Guard, remembered session, resume, CDN failover, verification, progress, input, cancel, and retry.
+- [ ] Meta login cookie capture, remembered session, expired credential, logout, manifest download, decompression, integrity failure, resume, and cancel.
+- [ ] Steam and Meta launch, VR detection/warning, arguments/environment, elevation denied, process tracking, close-on-launch, and LIV integration.
+- [ ] Version import, edit, clone, verify, relocation, delete, shared junctions/symlinks, backup/restore, and shortcut creation.
+- [ ] Mod dependencies, import/install/uninstall, maps and playlists, model operations, search/filter/sort, archives, sharing, caches, and audio previews.
+- [ ] Deep links, `.bplist`, native file drop, playlist drag-and-drop, and external links.
+- [ ] Offline services, corrupt archive, inaccessible destination, interrupted operation, network retry, and app/window closure during a cancellable operation.
+- [ ] Preview first-run settings import copies configuration only, reuses selected library paths, uses separate settings, and blocks mutation while legacy Electron runs.
+- [ ] Preview installer does not claim existing protocols or file associations; explicit settings claim records prior owner and uninstall restores only while preview remains owner.
+- [ ] Replacement detects legacy install, backs up settings and registrations, aborts on running app or uninstall failure, preserves game data, and restores on rollback.
+- [ ] Replacement updater rejects missing/invalid signatures; preview and replacement update channels remain separate.
+- [ ] Uninstall of either profile preserves game libraries; rollback by reinstalling retained Electron installer and restoring configuration/registration backups.
+
+## Visual comparison
+
+- [ ] Compare baseline and Tauri at 100%, 125%, and 150% Windows display scaling.
+- [ ] Compare light, dark, OS theme, and custom colors.
+- [ ] Compare main window at default, minimum, and maximized sizes; review all six app windows.
+- [ ] Compare setup, library, version tabs, shared content, settings, dialogs, animations, fonts, icons, spacing, typography, and scroll behavior.
+- [ ] Record any remaining WebView2 rendering differences with matching baseline and Tauri captures supplied or initiated by the user.
+
+## Installer and artifact review
+
+- [ ] Confirm preview and replacement NSIS install/uninstall, WebView2 bootstrapper, shortcuts, and elevation behavior.
+- [ ] Confirm replacement rollback backup paths and `migration.json` contents before relying on installer recovery.
+- [ ] Confirm artifact hashes and signing status against files delivered to reviewer.
+- [ ] Confirm no Electron or Node runtime is bundled; Node is build tooling only.
