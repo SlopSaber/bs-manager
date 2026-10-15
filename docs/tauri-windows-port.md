@@ -15,8 +15,8 @@ Each command type-checks the Tauri renderer contracts, builds all six HTML entry
 
 Current local installers compile successfully and are unsigned. The generated NSIS script contains both preinstall and preuninstall hook call sites. The hook code was included in the installer builds, but neither installer has been executed; migration, registry restoration, and uninstall behavior still need user-led review:
 
-- Preview: `release/tauri/preview/BSManager-Preview-1.6.0-x64-setup.exe`, SHA-256 `191debc22057e1e20d5a399f0113552ae4e4e3fe563d9afe14391cde941fa580`.
-- Replacement: `release/tauri/replacement/BSManager-1.6.0-x64-setup.exe`, SHA-256 `e1a55e6be566de657051f0a7dd6cf3124520235defd69fecb88c53f704a9728d`.
+- Preview: `release/tauri/preview/BSManager-Preview-1.6.0-x64-setup.exe`, SHA-256 `513033214c09348c84f7fe3af4ffa3d6a9156080be50fc13e7e933c919b2b3eb`.
+- Replacement: `release/tauri/replacement/BSManager-1.6.0-x64-setup.exe`, SHA-256 `f6957d460bd7842ccdc80bcf1576dde6187b68eceb58837205dad544ab1d0548`.
 
 ## Implemented in the Rust host
 
@@ -27,7 +27,7 @@ Current local installers compile successfully and are unsigned. The generated NS
 - BeatSaver map and playlist search/details; local map listing, deletion, import/export, download, and one-click install. Map installs stage archive extraction, compute the Beat Saber hash, validate it against BeatSaver, then move the map into the managed folder.
 - BeatSaver response caching for maps fetched during the current session. The scraped song-detail cache loads the existing replacement-profile protobuf file, refreshes it from the current sources with ETag support, stores it beside profile settings, and supplies detail data to local maps and playlists. The per-folder `map-info-cache.json` is loaded, reused, and debounced to disk in the same location; deleted map entries are removed. Preview caches remain separate.
 - Playlist listing, file import, install, delete, archive export, download, and one-click install. Download progress keeps the renderer’s existing payload shape.
-- BeatMods availability and health routes; installed-mod discovery, DLL/ZIP import, download and content-hash validation, installation, removal, and remove-all. Archive member paths reject traversal and symbolic links. IPA execution and network cancellation still need runtime review.
+- BeatMods availability and health routes; installed-mod discovery, including library files matched to manifests, DLL/ZIP import, download and content-hash validation, installation, removal, and remove-all. Archive member paths reject traversal and symbolic links. IPA execution and network cancellation still need runtime review.
 - Update checks report no update. Download/install routes return `UPDATES_DISABLED` until a signed Tauri update endpoint is configured. Taskbar progress follows renderer progress on the originating window.
 - Tauri logs use info level and redact registered secret strings plus Oculus token patterns before writing to any target. Renderer `add-filter-string` and `add-filter-pattern` routes update the shared formatter filters.
 - Static configuration commands preserve unrecognized fields during file round trips. Request streaming and cancellation are bound to the originating window.

@@ -86,12 +86,27 @@ async fn get_installed_mods<R: Runtime>(app: &AppHandle<R>, version: &Value) -> 
     });
     let lookup_results = futures_util::future::join_all(lookups).await;
     let mut found = HashMap::<String, Value>::new();
+    let mut manifest_matches = Vec::<Value>::new();
     for (candidate, lookup) in candidates.into_iter().zip(lookup_results) {
         let (path, is_plugin, is_lib) = candidate;
         let Ok((Some(mod_version), _)) = lookup else { continue; };
-        if !path.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("manifest"))
-            && !is_lib && is_plugin {
-            if let Some(id) = mod_version.get("id") {
+        let is_bsipa_injector = path == root.join("Beat Saber_Data/Managed/IPA.Injector.dll");
+        if !is_bsipa_injector && mod_version.get("contentHashes").and_then(Value::as_array).is_some_and(|hashes| {
+            hashes.iter().any(|content| content.get("path").and_then(Value::as_str)
+                .is_some_and(|path| path.contains("IPA.exe")))
+        }) {
+            continue;
+        }
+        if path.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("manifest")) {
+            manifest_matches.push(mod_version);
+            continue;
+        }
+        let Some(id) = mod_version.get("id") else { continue; };
+        if is_plugin {
+            found.entry(id.to_string()).or_insert(mod_version);
+        } else if is_lib {
+            if let Some(index) = manifest_matches.iter().position(|manifest| manifest.get("id") == Some(id)) {
+                manifest_matches.remove(index);
                 found.entry(id.to_string()).or_insert(mod_version);
             }
         }
