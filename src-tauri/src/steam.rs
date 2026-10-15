@@ -303,6 +303,14 @@ pub fn send_input<R: Runtime>(app: &AppHandle<R>, args: &Value) -> Value {
     json!(sent)
 }
 
+pub fn protect_secret(value: &[u8]) -> io::Result<Vec<u8>> {
+    dpapi::protect(value)
+}
+
+pub fn unprotect_secret(value: &[u8]) -> io::Result<Vec<u8>> {
+    dpapi::unprotect(value)
+}
+
 async fn handle_event<R: Runtime>(
     line: &str,
     app: &AppHandle<R>,

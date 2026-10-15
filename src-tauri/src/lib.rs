@@ -11,6 +11,7 @@ use tauri_plugin_opener::OpenerExt;
 
 mod library;
 mod linker;
+mod meta;
 mod stores;
 mod steam;
 mod versions;
@@ -25,6 +26,7 @@ const PREVIEW_IMPORT_MARKER: &str = "preview-legacy-settings-import";
 struct AppState {
     window_arguments: Mutex<HashMap<String, Value>>,
     library_operation: tokio::sync::Mutex<()>,
+    meta_login: tokio::sync::Mutex<()>,
     active_requests: Mutex<HashMap<String, Arc<AtomicBool>>>,
     steam_download: Mutex<Option<steam::SteamControl>>,
 }
@@ -346,6 +348,24 @@ async fn handle_request<R: Runtime>(
         }
         "stop-download-bs-version" => Ok(steam::stop_download(app)),
         "send-input-bs-download" => Ok(steam::send_input(app, &args)),
+        "login-with-meta" => {
+            if window.label() != "main" {
+                return Err(serialized_error("Meta login is only available in the main window", "WINDOW_NOT_ALLOWED"));
+            }
+            let app_state = app.state::<AppState>();
+            let _login = app_state.meta_login.lock().await;
+            let keep_token = args.as_bool().unwrap_or(false);
+            meta::login(app, &cancelled, keep_token).await
+        }
+        "delete-meta-session" => {
+            if window.label() != "main" {
+                return Err(serialized_error("Meta session controls are only available in the main window", "WINDOW_NOT_ALLOWED"));
+            }
+            let app_state = app.state::<AppState>();
+            let _login = app_state.meta_login.lock().await;
+            meta::delete_session(app).await
+        }
+        "meta-session-exists" => Ok(meta::session_exists(app).await),
         "current-version" => Ok(json!(env!("CARGO_PKG_VERSION"))),
         "get-available-update" => Ok(Value::Null),
         "check-update" => Ok(json!(false)),
@@ -587,6 +607,10 @@ async fn handle_request<R: Runtime>(
 
 #[tauri::command]
 async fn ipc_send<R: Runtime>(app: AppHandle<R>, window: WebviewWindow<R>, channel: String, args: Option<Value>) {
+    if !is_application_window(window.label()) {
+        log::warn!("Rejected IPC route '{channel}' from window '{}'", window.label());
+        return;
+    }
     if let Some(response_id) = channel.strip_suffix("_teardown") {
         let state = app.state::<AppState>();
         if let Ok(mut requests) = state.active_requests.lock() {
@@ -630,11 +654,16 @@ async fn ipc_send<R: Runtime>(app: AppHandle<R>, window: WebviewWindow<R>, chann
 }
 
 #[tauri::command]
-fn register_protocol<R: Runtime>(app: AppHandle<R>, protocol: String) -> Result<bool, String> {
+fn register_protocol<R: Runtime>(app: AppHandle<R>, window: WebviewWindow<R>, protocol: String) -> Result<bool, String> {
+    if !is_application_window(window.label()) { return Err("Protocol registration is unavailable in this window".to_owned()); }
     let supported = ["bsmanager", "beatsaver", "web+bsmap", "bsplaylist", "modelsaber"];
     if !supported.contains(&protocol.as_str()) { return Err("Unsupported BSManager protocol".to_owned()); }
     app.deep_link().register(&protocol).map_err(|error| error.to_string())?;
     Ok(true)
+}
+
+fn is_application_window(label: &str) -> bool {
+    matches!(label, "main" | "launcher" | "oneclick-download-map" | "oneclick-download-playlist" | "oneclick-download-model" | "shortcut-launch")
 }
 
 fn handle_launch_argument<R: Runtime>(app: &AppHandle<R>, argument: &str) {
