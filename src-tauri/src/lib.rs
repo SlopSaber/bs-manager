@@ -1019,18 +1019,20 @@ async fn handle_request<R: Runtime>(
         }
         "open-window-or-focus" | "open-window-then-close-all" => {
             let template = args.as_str().ok_or_else(|| serialized_error("Window name is required", "INVALID_WINDOW"))?;
+            create_window(app, template, None).map_err(|error| serialized_error(error, "WINDOW_FAILED"))?;
             if channel == "open-window-then-close-all" {
-                for (label, _, _, _, _, _, _) in [
-                    resolve_window("index.html"), resolve_window("launcher.html"),
-                    resolve_window("oneclick-download-map.html"), resolve_window("oneclick-download-playlist.html"),
-                    resolve_window("oneclick-download-model.html"), resolve_window("shortcut-launch.html"),
-                ].into_iter().flatten() {
-                    if label != resolve_window(template).map(|value| value.0).unwrap_or("") {
-                        if let Some(other) = app.get_webview_window(label) { let _ = other.close(); }
+                if let Some((target_label, _, _, _, _, _, _)) = resolve_window(template) {
+                    for (label, _, _, _, _, _, _) in [
+                        resolve_window("index.html"), resolve_window("launcher.html"),
+                        resolve_window("oneclick-download-map.html"), resolve_window("oneclick-download-playlist.html"),
+                        resolve_window("oneclick-download-model.html"), resolve_window("shortcut-launch.html"),
+                    ].into_iter().flatten() {
+                        if label != target_label {
+                            if let Some(other) = app.get_webview_window(label) { let _ = other.close(); }
+                        }
                     }
                 }
             }
-            create_window(app, template, None).map_err(|error| serialized_error(error, "WINDOW_FAILED"))?;
             Ok(Value::Null)
         }
         "open-logs" => {
