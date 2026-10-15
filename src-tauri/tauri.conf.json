@@ -9,22 +9,7 @@
         "frontendDist": "../release/tauri/ui"
     },
     "app": {
-        "windows": [
-            {
-                "label": "main",
-                "title": "BSManager Preview",
-                "url": "index.html",
-                "width": 1080,
-                "height": 720,
-                "minWidth": 900,
-                "minHeight": 500,
-                "center": true,
-                "resizable": true,
-                "decorations": false,
-                "visible": true,
-                "dragDropEnabled": true
-            }
-        ],
+        "windows": [],
         "security": {
             "csp": "default-src 'self' asset:; img-src 'self' asset: data: https: http:; style-src 'self' 'unsafe-inline' https://use.typekit.net https://p.typekit.net; font-src 'self' data: https://use.typekit.net https://p.typekit.net; script-src 'self'; connect-src ipc: http://ipc.localhost https: http: ws: wss:; frame-src https:; media-src 'self' asset: blob: data:"
         }

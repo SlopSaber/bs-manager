@@ -453,11 +453,17 @@ fn create_window<R: Runtime>(app: &AppHandle<R>, template: &str, args: Option<Va
         _ => String::new(),
     };
     let url = WebviewUrl::App(format!("{page}{query}").into());
+    let title = if label == "main" && app.config().identifier == "io.bsmanager.bsmanager.preview" {
+        "BSManager Preview"
+    } else {
+        "BSManager"
+    };
     WebviewWindowBuilder::new(app, label, url)
-        .title(if label == "main" { "BSManager" } else { "BSManager" })
+        .title(title)
         .inner_size(width, height)
         .min_inner_size(min_width, min_height)
         .resizable(resizable)
+        .center()
         .decorations(false)
         .visible(true)
         .build()
@@ -1102,7 +1108,19 @@ fn is_application_window(label: &str) -> bool {
     matches!(label, "main" | "launcher" | "oneclick-download-map" | "oneclick-download-playlist" | "oneclick-download-model" | "shortcut-launch")
 }
 
-fn handle_launch_argument<R: Runtime>(app: &AppHandle<R>, argument: &str) {
+fn first_launch_argument(arguments: &[String]) -> Option<&str> {
+    arguments.iter()
+        .find(|argument| url::Url::parse(argument).is_ok_and(|url| {
+            ["bsmanager", "bsmanager-preview", "beatsaver", "web+bsmap", "bsplaylist", "modelsaber"]
+                .contains(&url.scheme())
+        }))
+        .or_else(|| arguments.iter().find(|argument| {
+            Path::new(argument).extension().is_some_and(|extension| extension.eq_ignore_ascii_case("bplist"))
+        }))
+        .map(String::as_str)
+}
+
+fn handle_launch_argument<R: Runtime>(app: &AppHandle<R>, argument: &str) -> bool {
     if let Ok(url) = url::Url::parse(argument) {
         if ["bsmanager", "bsmanager-preview", "beatsaver", "web+bsmap", "bsplaylist", "modelsaber"].contains(&url.scheme()) {
             let mut args = Map::new();
@@ -1138,22 +1156,47 @@ fn handle_launch_argument<R: Runtime>(app: &AppHandle<R>, argument: &str) {
                 _ => None,
             };
             if let Some(template) = template {
-                if let Err(error) = create_window(app, template, Some(Value::Object(args))) {
-                    log::warn!("Could not open deep-link window: {error}");
-                }
+                return match create_window(app, template, Some(Value::Object(args))) {
+                    Ok(()) => true,
+                    Err(error) => { log::warn!("Could not open deep-link window: {error}"); false }
+                };
             } else {
                 let _ = app.emit("app-url", argument.to_owned());
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.show();
                     let _ = window.set_focus();
+                    return true;
                 }
+                return create_window(app, "index.html", None).is_ok();
             }
         }
     } else if Path::new(argument).extension().is_some_and(|extension| extension.eq_ignore_ascii_case("bplist")) {
         let args = json!({ "playlistUrl": argument });
-        if let Err(error) = create_window(app, "oneclick-download-playlist.html", Some(args)) {
-            log::warn!("Could not open playlist file: {error}");
+        return match create_window(app, "oneclick-download-playlist.html", Some(args)) {
+            Ok(()) => true,
+            Err(error) => { log::warn!("Could not open playlist file: {error}"); false }
+        };
+    }
+    false
+}
+
+fn should_open_update_launcher<R: Runtime>(app: &AppHandle<R>) -> bool {
+    let mut settings = match read_settings(app) {
+        Ok(settings) => settings,
+        Err(error) => { log::warn!("Could not read auto-update setting: {error}"); return false }
+    };
+    let mode = settings.get("auto-update").and_then(Value::as_str).unwrap_or("always").to_owned();
+    if mode == "once" {
+        settings.insert("auto-update".to_owned(), json!("never"));
+        if let Err(error) = write_settings(app, &settings) {
+            log::warn!("Could not clear one-time auto-update setting: {error}");
         }
+    }
+    if mode == "never" { return false; }
+    match configured_update_source(app) {
+        Ok(Some(_)) => true,
+        Ok(None) => false,
+        Err(error) => { log::warn!("Tauri auto-update is unavailable: {}", error.message); false }
     }
 }
 
@@ -1294,7 +1337,9 @@ pub fn run() {
     tauri::Builder::default()
         .manage(AppState { log_redactions, ..AppState::default() })
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
-            for argument in args { handle_launch_argument(app, &argument); }
+            if let Some(argument) = first_launch_argument(&args) {
+                handle_launch_argument(app, argument);
+            }
         }))
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_dialog::init())
@@ -1322,8 +1367,16 @@ pub fn run() {
             map_info_cache::initialize(app.handle());
             let cache_app = app.handle().clone();
             tauri::async_runtime::spawn(async move { song_cache::initialize(&cache_app).await; });
-            for argument in std::env::args_os().skip(1).filter_map(|argument| argument.into_string().ok()) {
-                handle_launch_argument(app.handle(), &argument);
+            let arguments = std::env::args_os().skip(1).filter_map(|argument| argument.into_string().ok()).collect::<Vec<_>>();
+            if let Some(argument) = first_launch_argument(&arguments)
+                && handle_launch_argument(app.handle(), argument) {
+                return Ok(());
+            }
+            let startup_window = if should_open_update_launcher(app.handle()) { "launcher.html" } else { "index.html" };
+            if let Err(error) = create_window(app.handle(), startup_window, None) {
+                log::error!("Could not open startup window '{startup_window}': {error}");
+                create_window(app.handle(), "index.html", None)
+                    .map_err(|_| std::io::Error::other("Could not open fallback startup window"))?;
             }
             Ok(())
         })
