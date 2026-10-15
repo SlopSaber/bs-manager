@@ -13,6 +13,7 @@ mod library;
 mod launch;
 mod linker;
 mod meta;
+mod models;
 mod oculus;
 mod shortcuts;
 mod stores;
@@ -397,6 +398,8 @@ async fn handle_request<R: Runtime>(
         }
         "bs-launch.need-start-as-admin" => Ok(windows_integration::need_start_as_admin().await),
         "create-launch-shortcut" => Ok(json!(shortcuts::create_launch_shortcut(app, &args).await)),
+        "ms-get-model-by-id" => Ok(models::get_model_by_id(&args).await),
+        "search-models" => models::search_models(&args).await,
         "is-oculus-sideloaded-apps-enabled" => windows_integration::sideloaded_apps_enabled(),
         "enable-oculus-sideloaded-apps" => windows_integration::enable_sideloaded_apps(app).await,
         "vr-runtime.get-active" => Ok(windows_integration::active_vr_runtime(args.as_str())),
