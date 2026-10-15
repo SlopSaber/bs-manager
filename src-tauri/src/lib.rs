@@ -4,6 +4,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use tauri::{AppHandle, Emitter, Manager, Runtime, WebviewUrl, WebviewWindow, WebviewWindowBuilder, window::{ProgressBarState, ProgressBarStatus}};
+use regex::Regex;
 use tauri_plugin_dialog::{DialogExt, FilePath};
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
@@ -40,6 +41,63 @@ struct AppState {
     launch_in_progress: AtomicBool,
     active_requests: Mutex<HashMap<String, Arc<AtomicBool>>>,
     steam_download: Mutex<Option<steam::SteamControl>>,
+    log_redactions: Arc<Mutex<LogRedactions>>,
+}
+
+#[derive(Default)]
+struct LogRedactions {
+    strings: Vec<String>,
+    patterns: Vec<Regex>,
+}
+
+impl LogRedactions {
+    fn with_default_patterns() -> Self {
+        Self {
+            strings: Vec::new(),
+            patterns: Regex::new(r"(FRL|OC)\S{10,}").into_iter().collect(),
+        }
+    }
+
+    fn redact(&self, message: &str) -> String {
+        let mut redacted = message.to_owned();
+        for secret in &self.strings {
+            if !secret.is_empty() {
+                redacted = redacted.replace(secret, "****");
+            }
+        }
+        for pattern in &self.patterns {
+            redacted = pattern.replace_all(&redacted, "****").into_owned();
+        }
+        redacted
+    }
+
+    fn add_string(&mut self, secret: &str) -> Result<(), SerializedError> {
+        if secret.len() > 16 * 1024 {
+            return Err(serialized_error("Log redaction string is too long", "INVALID_LOG_FILTER"));
+        }
+        if !secret.is_empty() && !self.strings.iter().any(|value| value == secret) {
+            if self.strings.len() >= 512 {
+                return Err(serialized_error("Too many log redaction strings", "LOG_FILTER_LIMIT"));
+            }
+            self.strings.push(secret.to_owned());
+        }
+        Ok(())
+    }
+
+    fn add_pattern(&mut self, source: &str) -> Result<(), SerializedError> {
+        if source.len() > 1024 {
+            return Err(serialized_error("Log redaction pattern is too long", "INVALID_LOG_FILTER"));
+        }
+        let pattern = Regex::new(source)
+            .map_err(|_| serialized_error("Log redaction pattern is invalid", "INVALID_LOG_FILTER"))?;
+        if !self.patterns.iter().any(|existing| existing.as_str() == source) {
+            if self.patterns.len() >= 128 {
+                return Err(serialized_error("Too many log redaction patterns", "LOG_FILTER_LIMIT"));
+            }
+            self.patterns.push(pattern);
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Serialize)]
@@ -725,7 +783,20 @@ async fn handle_request<R: Runtime>(
             Ok(Value::Null)
         }
         "log-error" => { log::error!("Renderer error: {args}"); Ok(Value::Null) }
-        "add-filter-string" | "add-filter-pattern" => Ok(Value::Null),
+        "add-filter-string" => {
+            let secret = args.as_str().ok_or_else(|| serialized_error("Log redaction value must be a string", "INVALID_LOG_FILTER"))?;
+            app.state::<AppState>().log_redactions.lock()
+                .map_err(|_| serialized_error("Log filters are unavailable", "LOG_FILTER_FAILED"))?
+                .add_string(secret)?;
+            Ok(Value::Null)
+        }
+        "add-filter-pattern" => {
+            let source = args.as_str().ok_or_else(|| serialized_error("Log redaction pattern must be a string", "INVALID_LOG_FILTER"))?;
+            app.state::<AppState>().log_redactions.lock()
+                .map_err(|_| serialized_error("Log filters are unavailable", "LOG_FILTER_FAILED"))?
+                .add_pattern(source)?;
+            Ok(Value::Null)
+        }
         "get-window-args" => {
             let label = window.label().to_owned();
             let state = app.state::<AppState>();
@@ -948,14 +1019,31 @@ fn are_protocols_registered<R: Runtime>(app: &AppHandle<R>, window: &WebviewWind
 }
 
 pub fn run() {
+    let log_redactions = Arc::new(Mutex::new(LogRedactions::with_default_patterns()));
+    let logger_redactions = Arc::clone(&log_redactions);
+    let logger = tauri_plugin_log::Builder::new()
+        .level(log::LevelFilter::Info)
+        .format(move |out, message, record| {
+            let message = logger_redactions.lock()
+                .map(|filters| filters.redact(&message.to_string()))
+                .unwrap_or_else(|_| message.to_string());
+            out.finish(format_args!(
+                "[{}][{}][{}] {}",
+                chrono::Utc::now().format("%Y-%m-%d][%H:%M:%S"),
+                record.target(),
+                record.level(),
+                message
+            ));
+        })
+        .build();
     tauri::Builder::default()
-        .manage(AppState::default())
+        .manage(AppState { log_redactions, ..AppState::default() })
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             for argument in args { handle_launch_argument(app, &argument); }
         }))
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_log::Builder::new().build())
+        .plugin(logger)
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_store::Builder::new().build())

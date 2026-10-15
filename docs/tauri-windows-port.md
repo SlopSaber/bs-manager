@@ -15,8 +15,8 @@ Each command type-checks the Tauri renderer contracts, builds all six HTML entry
 
 Current local installers compile successfully and are unsigned. The generated NSIS script contains both preinstall and preuninstall hook call sites. The hook code was included in the installer builds, but neither installer has been executed; migration, registry restoration, and uninstall behavior still need user-led review:
 
-- Preview: `release/tauri/preview/BSManager-Preview-1.6.0-x64-setup.exe`, SHA-256 `c8ab524fff336b1de31f6ed9ecf37918adb3c72b4200ecf2a35d19e834809260`.
-- Replacement: `release/tauri/replacement/BSManager-1.6.0-x64-setup.exe`, SHA-256 `6719dd2d9eb1ae71ff83e5658b71d33e74f071d196582e2329af0bfa450bdb9d`.
+- Preview: `release/tauri/preview/BSManager-Preview-1.6.0-x64-setup.exe`, SHA-256 `363dbe2e605d43135cecf58474a3e1bd3c02b9d10e9160cf7811175540dfff7a`.
+- Replacement: `release/tauri/replacement/BSManager-1.6.0-x64-setup.exe`, SHA-256 `1a6bec093ac487a0ee0001afb9e75480fc41dbfbba52f6965aa53dce39818887`.
 
 ## Implemented in the Rust host
 
@@ -29,13 +29,14 @@ Current local installers compile successfully and are unsigned. The generated NS
 - Playlist listing, file import, install, delete, archive export, download, and one-click install. Download progress keeps the renderer’s existing payload shape.
 - BeatMods availability and health routes; installed-mod discovery, DLL/ZIP import, download and content-hash validation, installation, removal, and remove-all. Archive member paths reject traversal and symbolic links. IPA execution and network cancellation still need runtime review.
 - Update checks report no update. Download/install routes return `UPDATES_DISABLED` until a signed Tauri update endpoint is configured. Taskbar progress follows renderer progress on the originating window.
+- Tauri logs use info level and redact registered secret strings plus Oculus token patterns before writing to any target. Renderer `add-filter-string` and `add-filter-pattern` routes update the shared formatter filters.
 - Static configuration commands preserve unrecognized fields during file round trips. Request streaming and cancellation are bound to the originating window.
 
 These routes compile. Their runtime behavior has not yet passed the user-led acceptance scenarios.
 
 ## Remaining parity work
 
-- All shared Windows IPC route names are registered; the only shared routes absent from Rust are Linux-specific. Bulk map-cache loading and persistence, log redaction filters, deep-link delivery, and some configuration or library behavior still need implementation or parity review. See `src/shared/models/ipc/ipc-routes.ts` and `src/main/ipcs` for the source inventory.
+- All shared Windows IPC route names are registered; the only shared routes absent from Rust are Linux-specific. Bulk map-cache loading and persistence, deep-link delivery, and some configuration or library behavior still need implementation or parity review. See `src/shared/models/ipc/ipc-routes.ts` and `src/main/ipcs` for the source inventory.
 - Verify six-window behavior and window-specific capabilities. The shared renderer entry pages exist, but the auxiliary window lifecycle and remote authentication/webview isolation need acceptance review.
 - Finish first-run preview library import behavior and replacement install failure recovery. The replacement hook retains configuration and registry backups, but an uninstaller that succeeds before a later Tauri install failure still requires manual Electron reinstall for rollback. Exercise both hooks, protocol restoration, and rollback in user-led review. Replacement is not ready to replace an installed Electron build.
 - Complete Meta and Steam credential migration, download resume/error paths, map and playlist cache parity, mod dependency and IPA behavior, content sharing, archive interruption recovery, relocation, shortcuts, LIV integration, proxy behavior, process tracking, and signed update endpoint configuration.

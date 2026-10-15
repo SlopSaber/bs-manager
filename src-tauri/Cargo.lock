@@ -364,6 +364,7 @@ dependencies = [
  "junction",
  "log",
  "md5",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",
