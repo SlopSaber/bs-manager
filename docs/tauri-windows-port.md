@@ -11,7 +11,7 @@ pnpm run build:tauri:win
 pnpm run build:tauri:win:replacement
 ```
 
-Each command type-checks the Tauri renderer contracts, builds all six HTML entry pages, compiles Rust, creates an NSIS installer, and writes SHA-256 metadata under `release/tauri/<profile>`. The Windows workflow is build-only and runs no tests.
+Each command type-checks the Tauri renderer contracts, builds all six HTML entry pages, compiles Rust, creates an NSIS installer, and writes SHA-256 metadata under `release/tauri/<profile>`. The rewrite-branch Windows workflow builds both profiles and uploads installers as artifacts; it runs no tests. Legacy test, lint, and release jobs skip the rewrite branch.
 
 Current local installers compile successfully and are unsigned. The generated NSIS script contains both preinstall and preuninstall hook call sites. The hook code was included in the installer builds, but neither installer has been executed; migration, registry restoration, and uninstall behavior still need user-led review:
 

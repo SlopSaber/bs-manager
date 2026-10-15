@@ -11,6 +11,7 @@ on:
 
 jobs:
     build:
+        if: github.head_ref != 'rewrite/tauri-windows'
         strategy:
             matrix:
                 os: [ubuntu-latest, windows-latest]

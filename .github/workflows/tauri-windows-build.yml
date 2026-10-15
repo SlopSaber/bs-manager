@@ -6,8 +6,19 @@ on:
     workflow_dispatch:
 
 jobs:
-    preview-installer:
+    windows-installer:
+        name: Build ${{ matrix.profile }} installer
         runs-on: windows-latest
+        strategy:
+            fail-fast: false
+            matrix:
+                include:
+                    - profile: preview
+                      script: build:tauri:win
+                      artifact: bsmanager-tauri-preview-windows-x64
+                    - profile: replacement
+                      script: build:tauri:win:replacement
+                      artifact: bsmanager-tauri-replacement-windows-x64
         steps:
             - uses: actions/checkout@v4
             - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
@@ -19,10 +30,10 @@ jobs:
                   cache: pnpm
             - run: rustup target add x86_64-pc-windows-msvc
             - run: pnpm install --frozen-lockfile
-            - run: pnpm run build:tauri:win
+            - run: pnpm run ${{ matrix.script }}
             - uses: actions/upload-artifact@v4
               with:
-                  name: bsmanager-tauri-preview-windows-x64
-                  path: release/tauri/preview/*
+                  name: ${{ matrix.artifact }}
+                  path: release/tauri/${{ matrix.profile }}/*
                   if-no-files-found: error
                   retention-days: 30
