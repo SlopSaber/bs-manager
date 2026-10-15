@@ -95,6 +95,14 @@ function Restore-RegistryBackups([string[]] $backupFiles) {
     }
 }
 
+function Restore-LegacySettingsIfMissing([string] $backup, [string] $destination) {
+    if ([string]::IsNullOrWhiteSpace($backup) -or (Test-Path -LiteralPath $destination -PathType Leaf)) {
+        return
+    }
+    New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
+    Copy-Item -LiteralPath $backup -Destination $destination
+}
+
 try {
     $legacy = @(Get-LegacyInstallations)
     if ($legacy.Count -eq 0) { exit 0 }
@@ -160,8 +168,10 @@ try {
         -WorkingDirectory $legacy.InstallLocation -Wait -PassThru
     if ($uninstall.ExitCode -ne 0 -or (Test-Path -LiteralPath $legacy.Executable -PathType Leaf)) {
         Restore-RegistryBackups $registryBackups
+        Restore-LegacySettingsIfMissing $settingsBackup $settingsPath
         throw "The legacy BSManager uninstaller failed. Replacement install cancelled; backups are in $backupDirectory."
     }
+    Restore-LegacySettingsIfMissing $settingsBackup $settingsPath
 }
 catch {
     Write-Error $_
