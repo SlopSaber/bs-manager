@@ -182,9 +182,9 @@
   <h2><b>Built With</b></h2>
   <ul>
     <li>
-      <a href="https://electron-react-boilerplate.js.org/"><img
-          src="https://img.shields.io/badge/-Electron%20React%20Boilerplate-black?style=for-the-badge&logo=Electron"
-          alt="Electron React Boilerplate"></a>
+      <a href="https://v2.tauri.app/"><img
+          src="https://img.shields.io/badge/-Tauri%202-FFC131?style=for-the-badge&logo=tauri&logoColor=black"
+          alt="Tauri 2"></a>
     </li>
     <li>
       <a href="https://github.com/SteamRE/DepotDownloader"><img

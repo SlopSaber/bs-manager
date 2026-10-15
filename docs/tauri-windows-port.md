@@ -1,6 +1,6 @@
 # Windows Tauri port status
 
-The `rewrite/tauri-windows` branch builds a Windows Tauri 2 application from the existing React renderer. Its package manifest has no Electron runtime or packager dependencies; Node is build tooling. Rollback uses a separately retained Electron installer. The app version remains `1.6.0` for local artifacts.
+The `rewrite/tauri-windows` branch builds a Windows Tauri 2 application from the existing React renderer. The Electron main process, preload bridge, and Electron packaging hooks are removed. Its package manifest has no Electron runtime or packager dependencies; Node is build tooling. Rollback uses a separately retained Electron installer, and the original source remains on baseline commit `00380c798ea3a8447270e8bbd367e921d03d154b`. The app version remains `1.6.0` for local artifacts.
 
 ## Build
 
@@ -17,8 +17,8 @@ Signed remote updates are opt-in at compile time. Preview reads `BSM_TAURI_PREVI
 
 Current local installers compile successfully under Node 24.21.0 and are unsigned. All profiles keep Tauri's configured window list empty so startup can choose a target before creating any window: a supported protocol URL or `.bplist` opens its corresponding window without first creating the main window; otherwise the `auto-update` setting selects the launcher when a signed update source is configured, falling back to the main window when updates are disabled or unavailable. The generated NSIS script contains both preinstall and preuninstall hook call sites. The hook code was included in the installer builds, but neither installer has been executed; migration, registry restoration, and uninstall behavior still need user-led review:
 
-- Preview: `release/tauri/preview/BSManager-Preview-1.6.0-x64-setup.exe`, SHA-256 `834d226046feff1080259390de03e180d002629ef2db51fe46f397cd72c26660`.
-- Replacement: `release/tauri/replacement/BSManager-1.6.0-x64-setup.exe`, SHA-256 `6623c9631baba64ce3db782028f289ed2bf6668905e80910ffba17b47bb60fdc`.
+- Preview: `release/tauri/preview/BSManager-Preview-1.6.0-x64-setup.exe`, SHA-256 `eea0bf851f6be5ba04805cfcea7420a2c9bb30b9453ffdc690e319ef93e172a3`.
+- Replacement: `release/tauri/replacement/BSManager-1.6.0-x64-setup.exe`, SHA-256 `6943b958640b578f904f6c16d5f1e59c2b723907304691fe0a252b22539a04b8`.
 
 ## Implemented in the Rust host
 
@@ -49,7 +49,7 @@ The complete route-by-route, event, window, settings, failure, installer, and vi
 
 ## Remaining parity work
 
-- Deep-link and `.bplist` startup routing is implemented but still needs runtime parity review. Some settings/library behavior also needs review. See `src/shared/models/ipc/ipc-routes.ts` and `src/main/ipcs` for the source inventory.
+- Deep-link and `.bplist` startup routing is implemented but still needs runtime parity review. Some settings/library behavior also needs review. See `src/shared/models/ipc/ipc-routes.ts`, `src-tauri/src/lib.rs`, and the linked parity matrix for the route inventory.
 - Verify six-window behavior and window-specific capabilities. The shared renderer entry pages exist, but the auxiliary window lifecycle and remote authentication/webview isolation need acceptance review.
 - First-run preview import copies legacy settings into preview storage and reuses imported library paths without copying game installations. Verify this flow and replacement install failure recovery in user-led review. Preview process detection and mutation blocking also need acceptance review. If Electron uninstall succeeds and later Tauri installation fails, reinstall Electron manually and restore any needed registry backups. Replacement is not ready to replace an installed Electron build.
 - Verify Meta and Steam login, DPAPI-backed remembered sessions, and re-login when legacy credentials cannot be imported. Review download resume/error paths, map and playlist cache parity, mod dependency and IPA behavior, content sharing, archive interruption recovery, relocation, the system-proxy toggle, LIV registry sync, launch ownership, close-on-launch, and each configured signed updater channel. Remote updates stay disabled in current local artifacts because no endpoint/key pair was supplied.
