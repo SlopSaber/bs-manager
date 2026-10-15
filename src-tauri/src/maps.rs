@@ -170,6 +170,98 @@ pub async fn export_maps<R: Runtime>(
     Ok(Value::Null)
 }
 
+pub async fn import_maps<R: Runtime>(
+    app: &AppHandle<R>,
+    window: &WebviewWindow<R>,
+    response_channel: Option<&str>,
+    args: &Value,
+    cancelled: Arc<AtomicBool>,
+) -> Result<Value, SerializedError> {
+    let paths = args.get("paths").and_then(Value::as_array)
+        .ok_or_else(|| serialized_error("Map archive paths must be an array", "INVALID_PATHS"))?;
+    let version = args.get("version").filter(|value| !value.is_null()).unwrap_or(&Value::Null);
+    let root = map_folder(app, version)?;
+    tokio::fs::create_dir_all(&root).await
+        .map_err(|error| serialized_error(error.to_string(), "MAP_FOLDER_FAILED"))?;
+    let mut imported = 0_u64;
+    for archive_path in paths.iter().filter_map(Value::as_str) {
+        if cancelled.load(Ordering::Relaxed) {
+            return Err(serialized_error("Map import was cancelled", "REQUEST_CANCELLED"));
+        }
+        let archive_path = PathBuf::from(archive_path);
+        emit_import_progress(window, response_channel, 0, 0, None)?;
+        if !archive_path.is_file() { continue; }
+        let scan_path = archive_path.clone();
+        let folders = tokio::task::spawn_blocking(move || scan_map_archive(&scan_path)).await
+            .map_err(|error| serialized_error(error.to_string(), "MAP_IMPORT_FAILED"))?
+            .map_err(|error| serialized_error(error.to_string(), "INVALID_MAP_ARCHIVE"))?;
+        if folders.is_empty() {
+            emit_import_progress(window, response_channel, 1, 1, None)?;
+            continue;
+        }
+        let total = folders.len() as u64;
+        emit_import_progress(window, response_channel, 0, total, None)?;
+        let root_folder = folders.len() == 1 && folders[0] == ".";
+        let mut current = 0_u64;
+        for folder in folders {
+            if cancelled.load(Ordering::Relaxed) {
+                return Err(serialized_error("Map import was cancelled", "REQUEST_CANCELLED"));
+            }
+            let staging = root.join(format!(".bsmanager-import-{}", uuid::Uuid::new_v4()));
+            let archive_for_worker = archive_path.clone();
+            let staging_for_worker = staging.clone();
+            let folder_for_worker = folder.clone();
+            let extracted = tokio::task::spawn_blocking(move || {
+                extract_map_archive_folder(&archive_for_worker, &staging_for_worker, &folder_for_worker)
+            }).await.map_err(|error| serialized_error(error.to_string(), "MAP_IMPORT_FAILED"))?;
+            if let Err(error) = extracted {
+                let _ = tokio::fs::remove_dir_all(&staging).await;
+                return Err(serialized_error(error, "MAP_IMPORT_FAILED"));
+            }
+            if cancelled.load(Ordering::Relaxed) {
+                let _ = tokio::fs::remove_dir_all(&staging).await;
+                return Err(serialized_error("Map import was cancelled", "REQUEST_CANCELLED"));
+            }
+            let staging_for_load = staging.clone();
+            let parsed = tokio::task::spawn_blocking(move || load_map_info(&staging_for_load)).await
+                .map_err(|error| serialized_error(error.to_string(), "MAP_LOAD_FAILED"))?
+                .map_err(|error| serialized_error(error, "MAP_LOAD_FAILED"))?;
+            let Some(_) = parsed else {
+                let _ = tokio::fs::remove_dir_all(&staging).await;
+                continue;
+            };
+            let destination = if root_folder {
+                let name = archive_path.file_stem().unwrap_or_default().to_string_lossy();
+                root.join(sanitize_folder_name(&name))
+            } else {
+                let relative = safe_archive_relative(&folder)
+                    .map_err(|error| serialized_error(error, "INVALID_MAP_ARCHIVE"))?;
+                root.join(relative)
+            };
+            if let Some(parent) = destination.parent() {
+                tokio::fs::create_dir_all(parent).await
+                    .map_err(|error| serialized_error(error.to_string(), "MAP_FOLDER_FAILED"))?;
+            }
+            if let Err(error) = install_staged_map(&staging, &destination).await {
+                let _ = tokio::fs::remove_dir_all(&staging).await;
+                return Err(error);
+            }
+            let installed_path = destination.clone();
+            let local_map = tokio::task::spawn_blocking(move || load_map_info(&installed_path)).await
+                .map_err(|error| serialized_error(error.to_string(), "MAP_LOAD_FAILED"))?
+                .map_err(|error| serialized_error(error, "MAP_LOAD_FAILED"))?
+                .ok_or_else(|| serialized_error("Imported map has no Info.dat", "MAP_LOAD_FAILED"))?;
+            imported += 1;
+            current += 1;
+            emit_import_progress(window, response_channel, current, total, Some(local_map))?;
+        }
+    }
+    if imported == 0 {
+        return Err(serialized_error("No Info.dat file found in selected archives", "INVALID_MAP_ARCHIVE"));
+    }
+    Ok(Value::Null)
+}
+
 pub async fn download_map<R: Runtime>(
     app: &AppHandle<R>,
     args: &Value,
@@ -380,6 +472,96 @@ fn extract_map_archive(archive_path: &Path, destination: &Path) -> Result<(), St
             let mut file = File::create(output).map_err(|error| error.to_string())?;
             io::copy(&mut entry, &mut file).map_err(|error| error.to_string())?;
         }
+    }
+    Ok(())
+}
+
+fn scan_map_archive(archive_path: &Path) -> io::Result<Vec<String>> {
+    let file = File::open(archive_path)?;
+    let mut archive = ZipArchive::new(file).map_err(io::Error::other)?;
+    let mut folders = Vec::new();
+    for index in 0..archive.len() {
+        let entry = archive.by_index(index).map_err(io::Error::other)?;
+        let name = entry.name().map_err(io::Error::other)?.replace('\\', "/");
+        let Some(file_name) = name.rsplit('/').next() else { continue; };
+        if !file_name.eq_ignore_ascii_case("info.dat") || entry.enclosed_name().is_none() { continue; }
+        let folder = name.rsplit_once('/').map(|(folder, _)| folder).unwrap_or(".");
+        if !folders.iter().any(|existing| existing == folder) {
+            folders.push(folder.to_owned());
+        }
+    }
+    Ok(folders)
+}
+
+fn extract_map_archive_folder(archive_path: &Path, destination: &Path, folder: &str) -> Result<(), String> {
+    fs::create_dir_all(destination).map_err(|error| error.to_string())?;
+    let file = File::open(archive_path).map_err(|error| error.to_string())?;
+    let mut archive = ZipArchive::new(file).map_err(|error| error.to_string())?;
+    let prefix = if folder == "." { String::new() } else { format!("{}/", folder.trim_end_matches('/')) };
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).map_err(|error| error.to_string())?;
+        let Some(enclosed) = entry.enclosed_name() else { return Err("Map archive contains an unsafe path".to_owned()); };
+        if entry.is_symlink() { return Err("Map archive contains a symbolic link".to_owned()); }
+        let entry_name = entry.name().map_err(|error| error.to_string())?.replace('\\', "/");
+        let relative = if folder == "." {
+            enclosed.to_path_buf()
+        } else if entry_name.starts_with(&prefix) {
+            safe_archive_relative(&entry_name[prefix.len()..])?
+        } else {
+            continue;
+        };
+        if relative.as_os_str().is_empty() { continue; }
+        let output = destination.join(relative);
+        if entry.is_dir() {
+            fs::create_dir_all(&output).map_err(|error| error.to_string())?;
+        } else {
+            if let Some(parent) = output.parent() { fs::create_dir_all(parent).map_err(|error| error.to_string())?; }
+            let mut file = File::create(output).map_err(|error| error.to_string())?;
+            io::copy(&mut entry, &mut file).map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+fn safe_archive_relative(path: &str) -> Result<PathBuf, String> {
+    let path = Path::new(path);
+    if path.as_os_str().is_empty() || path.components().any(|component| !matches!(component, Component::Normal(_))) {
+        return Err("Map archive contains an invalid map folder".to_owned());
+    }
+    Ok(path.to_path_buf())
+}
+
+async fn install_staged_map(staging: &Path, destination: &Path) -> Result<(), SerializedError> {
+    if fs::symlink_metadata(destination).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
+        return Err(serialized_error("Map destination cannot be a symbolic link", "INVALID_PATH"));
+    }
+    let backup = destination.with_file_name(format!(".bsmanager-backup-{}", uuid::Uuid::new_v4()));
+    let had_destination = destination.exists();
+    if had_destination {
+        tokio::fs::rename(destination, &backup).await
+            .map_err(|error| serialized_error(error.to_string(), "MAP_REPLACE_FAILED"))?;
+    }
+    if let Err(error) = tokio::fs::rename(staging, destination).await {
+        if had_destination { let _ = tokio::fs::rename(&backup, destination).await; }
+        return Err(serialized_error(error.to_string(), "MAP_REPLACE_FAILED"));
+    }
+    if had_destination { let _ = tokio::fs::remove_dir_all(backup).await; }
+    Ok(())
+}
+
+fn emit_import_progress<R: Runtime>(
+    window: &WebviewWindow<R>,
+    response_channel: Option<&str>,
+    current: u64,
+    total: u64,
+    data: Option<Value>,
+) -> Result<(), SerializedError> {
+    if let Some(channel) = response_channel {
+        let mut value = json!({ "current": current, "total": total });
+        if let (Some(object), Some(data)) = (value.as_object_mut(), data) {
+            object.insert("data".into(), data);
+        }
+        window.emit(channel, value).map_err(|error| serialized_error(error.to_string(), "IPC_EMIT_FAILED"))?;
     }
     Ok(())
 }
