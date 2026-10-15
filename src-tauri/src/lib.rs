@@ -410,6 +410,18 @@ async fn handle_request<R: Runtime>(
             let _operation = app_state.library_operation.lock().await;
             maps::delete_maps(app, window, response_channel, &args, cancelled).await
         }
+        "export-maps" => maps::export_maps(app, window, response_channel, &args, cancelled).await,
+        "bs-maps.download-map" => {
+            let app_state = app.state::<AppState>();
+            let _operation = app_state.library_operation.lock().await;
+            maps::download_map(app, &args, cancelled).await
+        }
+        "one-click-install-map" => {
+            let app_state = app.state::<AppState>();
+            let _operation = app_state.library_operation.lock().await;
+            maps::one_click_install_map(app, &args, cancelled).await
+        }
+        "last-downloaded-map" => maps::stream_last_downloaded(window, response_channel, cancelled).await,
         "download-model" => {
             let app_state = app.state::<AppState>();
             let _operation = app_state.library_operation.lock().await;
@@ -710,7 +722,7 @@ async fn ipc_send<R: Runtime>(app: AppHandle<R>, window: WebviewWindow<R>, chann
             log::warn!("Windows Tauri one-way route '{channel}' failed: {}", error.message);
         }
     } else {
-        ipc_response(&window, &channel, &request, result, matches!(channel.as_str(), "import-version" | "download-bs-version" | "auto-download-bs-version" | "download-bs-version-qr" | "bs-oculus-download" | "bs-launch.launch" | "download-model" | "get-version-models" | "export-models" | "delete-models" | "load-version-maps" | "delete-maps"));
+        ipc_response(&window, &channel, &request, result, matches!(channel.as_str(), "import-version" | "download-bs-version" | "auto-download-bs-version" | "download-bs-version-qr" | "bs-oculus-download" | "bs-launch.launch" | "download-model" | "get-version-models" | "export-models" | "delete-models" | "load-version-maps" | "delete-maps" | "export-maps" | "last-downloaded-map"));
     }
 }
 

@@ -2,14 +2,19 @@ use std::{
     fs::{self, File},
     io::{self, Read},
     path::{Component, Path, PathBuf},
-    sync::{Arc, atomic::{AtomicBool, Ordering}},
+    sync::{Arc, OnceLock, atomic::{AtomicBool, Ordering}},
+    time::Duration,
 };
 
 use chrono::Local;
+use futures_util::StreamExt;
+use reqwest::Client;
 use serde_json::{Map, Value, json};
 use sha1::{Digest, Sha1};
 use tauri::{AppHandle, Emitter, Runtime, WebviewWindow};
+use tokio::io::AsyncWriteExt;
 use url::Url;
+use zip::{CompressionMethod, ZipArchive, write::{SimpleFileOptions, ZipWriter}};
 
 use crate::{SerializedError, linker, serialized_error, versions};
 
@@ -17,6 +22,7 @@ const LEVELS_FOLDER: &str = "Beat Saber_Data";
 const CUSTOM_LEVELS_FOLDER: &str = "CustomLevels";
 const SHARED_MAPS_FOLDER: &str = "SharedMaps";
 const METADATA_FILE: &str = "metadata.json";
+static LAST_DOWNLOADED: OnceLock<tokio::sync::broadcast::Sender<Value>> = OnceLock::new();
 
 pub async fn load_version_maps<R: Runtime>(
     app: &AppHandle<R>,
@@ -99,6 +105,389 @@ pub async fn delete_maps<R: Runtime>(
         emit_delete_progress(window, response_channel, total, deleted)?;
     }
     Ok(Value::Null)
+}
+
+pub async fn export_maps<R: Runtime>(
+    app: &AppHandle<R>,
+    window: &WebviewWindow<R>,
+    response_channel: Option<&str>,
+    args: &Value,
+    cancelled: Arc<AtomicBool>,
+) -> Result<Value, SerializedError> {
+    let version = args.get("version").filter(|value| !value.is_null()).unwrap_or(&Value::Null);
+    let root = map_folder(app, version)?;
+    let root = fs::canonicalize(&root).map_err(|error| serialized_error(error.to_string(), "MAP_FOLDER_FAILED"))?;
+    let output = args.get("outPath").and_then(Value::as_str).filter(|path| !path.trim().is_empty())
+        .ok_or_else(|| serialized_error("Archive output path is required", "INVALID_PATH"))?;
+    let output = PathBuf::from(output);
+    if !output.is_absolute() {
+        return Err(serialized_error("Archive output path must be absolute", "INVALID_PATH"));
+    }
+    let output_parent = output.parent().ok_or_else(|| serialized_error("Archive output folder is invalid", "INVALID_PATH"))?;
+    let output_parent = fs::canonicalize(output_parent)
+        .map_err(|error| serialized_error(error.to_string(), "INVALID_PATH"))?;
+    let output_file_name = output.file_name().ok_or_else(|| serialized_error("Archive filename is invalid", "INVALID_PATH"))?;
+    let output = output_parent.join(output_file_name);
+    if output.starts_with(&root) {
+        return Err(serialized_error("Archive output cannot be inside the map library", "INVALID_PATH"));
+    }
+
+    let selected = args.get("maps").and_then(Value::as_array).filter(|maps| !maps.is_empty());
+    let mut files = Vec::new();
+    if let Some(selected) = selected {
+        for map in selected {
+            let path = map.get("path").and_then(Value::as_str)
+                .ok_or_else(|| serialized_error("Map path is required", "INVALID_PATH"))?;
+            let path = fs::canonicalize(path).map_err(|error| serialized_error(error.to_string(), "INVALID_PATH"))?;
+            if path.parent() != Some(root.as_path()) || !path.is_dir() {
+                return Err(serialized_error("Map folder is outside the selected version", "INVALID_PATH"));
+            }
+            collect_map_archive_files(&path, &path, Path::new(path.file_name().unwrap_or_default()), &mut files)
+                .map_err(|error| serialized_error(error.to_string(), "MAP_EXPORT_FAILED"))?;
+        }
+    } else {
+        collect_map_archive_files(&root, &root, Path::new(""), &mut files)
+            .map_err(|error| serialized_error(error.to_string(), "MAP_EXPORT_FAILED"))?;
+    }
+
+    let total = files.len() as u64;
+    let output_text = output.to_string_lossy().to_string();
+    emit_archive_progress(window, response_channel, 0, total, &output_text)?;
+    let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel::<u64>();
+    let worker_cancelled = cancelled.clone();
+    let worker_output = output.clone();
+    let worker = tokio::task::spawn_blocking(move || write_map_archive(&worker_output, files, worker_cancelled, sender));
+    let mut progress_error = None;
+    while let Some(current) = receiver.recv().await {
+        if let Err(error) = emit_archive_progress(window, response_channel, current, total, &output_text) {
+            cancelled.store(true, Ordering::Relaxed);
+            progress_error = Some(error);
+        }
+    }
+    let result = worker.await.map_err(|error| serialized_error(error.to_string(), "MAP_EXPORT_FAILED"))?;
+    if let Some(error) = progress_error { return Err(error); }
+    result.map_err(|error| serialized_error(error, "MAP_EXPORT_FAILED"))?;
+    Ok(Value::Null)
+}
+
+pub async fn download_map<R: Runtime>(
+    app: &AppHandle<R>,
+    args: &Value,
+    cancelled: Arc<AtomicBool>,
+) -> Result<Value, SerializedError> {
+    let map = args.get("map").ok_or_else(|| serialized_error("Map details are required", "INVALID_MAP"))?;
+    let version = args.get("version").filter(|version| !version.is_null());
+    download_and_install_map(app, map, version, &cancelled).await
+}
+
+pub async fn one_click_install_map<R: Runtime>(
+    app: &AppHandle<R>,
+    map: &Value,
+    cancelled: Arc<AtomicBool>,
+) -> Result<Value, SerializedError> {
+    let mut installed = versions::get_installed_versions(app)?
+        .as_array().cloned().unwrap_or_default();
+    let target_version = installed.pop();
+    let downloaded = download_and_install_map(app, map, target_version.as_ref(), &cancelled).await?;
+    let source = downloaded.get("path").and_then(Value::as_str)
+        .ok_or_else(|| serialized_error("Downloaded map path is missing", "MAP_DOWNLOAD_FAILED"))?;
+    let source = PathBuf::from(source);
+    let source_parent = source.parent().and_then(|path| fs::canonicalize(path).ok())
+        .ok_or_else(|| serialized_error("Downloaded map folder is unavailable", "MAP_DOWNLOAD_FAILED"))?;
+    let app = app.clone();
+    tokio::task::spawn_blocking(move || -> Result<(), SerializedError> {
+        for version in installed {
+            if cancelled.load(Ordering::Relaxed) {
+                return Err(serialized_error("Map installation was cancelled", "REQUEST_CANCELLED"));
+            }
+            let root = map_folder(&app, &version)?;
+            fs::create_dir_all(&root).map_err(|error| serialized_error(error.to_string(), "MAP_FOLDER_FAILED"))?;
+            let real_root = fs::canonicalize(&root).map_err(|error| serialized_error(error.to_string(), "MAP_FOLDER_FAILED"))?;
+            if real_root == source_parent { continue; }
+            let destination = real_root.join(source.file_name().unwrap_or_default());
+            copy_map_directory(&source, &destination)?;
+        }
+        Ok(())
+    }).await.map_err(|error| serialized_error(error.to_string(), "MAP_COPY_FAILED"))??;
+    Ok(Value::Null)
+}
+
+pub async fn stream_last_downloaded<R: Runtime>(
+    window: &WebviewWindow<R>,
+    response_channel: Option<&str>,
+    cancelled: Arc<AtomicBool>,
+) -> Result<Value, SerializedError> {
+    let Some(channel) = response_channel else { return Ok(Value::Null); };
+    let mut receiver = LAST_DOWNLOADED.get_or_init(|| tokio::sync::broadcast::channel(32).0).subscribe();
+    while !cancelled.load(Ordering::Relaxed) {
+        match tokio::time::timeout(Duration::from_millis(250), receiver.recv()).await {
+            Ok(Ok(value)) => window.emit(channel, value)
+                .map_err(|error| serialized_error(error.to_string(), "IPC_EMIT_FAILED"))?,
+            Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) | Err(_) => {},
+            Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => break,
+        }
+    }
+    Ok(Value::Null)
+}
+
+async fn download_and_install_map<R: Runtime>(
+    app: &AppHandle<R>,
+    map: &Value,
+    version: Option<&Value>,
+    cancelled: &AtomicBool,
+) -> Result<Value, SerializedError> {
+    let first_version = map.pointer("/versions/0")
+        .ok_or_else(|| serialized_error("Map has no downloadable version", "INVALID_MAP"))?;
+    if first_version.get("hash").and_then(Value::as_str).filter(|hash| !hash.is_empty()).is_none() {
+        return Err(serialized_error("Map version hash is missing", "INVALID_MAP"));
+    }
+    let expected_hash = first_version.get("hash").and_then(Value::as_str).unwrap_or_default().to_lowercase();
+    let download_url = first_version.get("downloadURL").and_then(Value::as_str)
+        .ok_or_else(|| serialized_error("Map download URL is missing", "INVALID_MAP"))?;
+    let download_url = Url::parse(download_url)
+        .map_err(|error| serialized_error(error.to_string(), "INVALID_MAP_URL"))?;
+    if download_url.scheme() != "https" {
+        return Err(serialized_error("Map downloads require HTTPS", "INVALID_MAP_URL"));
+    }
+    let id = map.get("id").and_then(Value::as_str).unwrap_or("map");
+    let song = map.pointer("/metadata/songName").and_then(Value::as_str).unwrap_or("Unknown song");
+    let author = map.pointer("/metadata/levelAuthorName").and_then(Value::as_str).unwrap_or("Unknown mapper");
+    let folder_name = sanitize_folder_name(&format!("{id} ({song} - {author})"));
+    let root = map_folder(app, version.unwrap_or(&Value::Null))?;
+    tokio::fs::create_dir_all(&root).await
+        .map_err(|error| serialized_error(error.to_string(), "MAP_FOLDER_FAILED"))?;
+    let root = tokio::fs::canonicalize(&root).await
+        .map_err(|error| serialized_error(error.to_string(), "MAP_FOLDER_FAILED"))?;
+    let destination = root.join(&folder_name);
+    if fs::symlink_metadata(&destination).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
+        return Err(serialized_error("Map destination cannot be a symbolic link", "INVALID_PATH"));
+    }
+    if destination.exists() {
+        if let Ok(Some(existing)) = load_map_info(&destination) {
+            let existing_hash = existing.get("hash").and_then(Value::as_str);
+            let same_versions = map.get("versions").and_then(Value::as_array).is_some_and(|versions| {
+                !versions.is_empty() && versions.iter().all(|version| version.get("hash").and_then(Value::as_str) == existing_hash)
+            });
+            if same_versions { return Ok(existing); }
+        }
+    }
+
+    let id = uuid::Uuid::new_v4().to_string();
+    let staging = root.join(format!(".bsmanager-map-{id}"));
+    let archive_path = root.join(format!(".bsmanager-map-{id}.zip"));
+    let backup = root.join(format!(".bsmanager-map-backup-{id}"));
+    let result = async {
+        download_map_archive(&download_url, &archive_path, cancelled).await?;
+        let archive_for_worker = archive_path.clone();
+        let staging_for_worker = staging.clone();
+        tokio::task::spawn_blocking(move || extract_map_archive(&archive_for_worker, &staging_for_worker)).await
+            .map_err(|error| serialized_error(error.to_string(), "MAP_EXTRACT_FAILED"))?
+            .map_err(|error| serialized_error(error.to_string(), "MAP_EXTRACT_FAILED"))?;
+        let staging_for_load = staging.clone();
+        let extracted = tokio::task::spawn_blocking(move || load_map_info(&staging_for_load)).await
+            .map_err(|error| serialized_error(error.to_string(), "MAP_LOAD_FAILED"))?
+            .map_err(|error| serialized_error(error, "MAP_LOAD_FAILED"))?
+            .ok_or_else(|| serialized_error("Downloaded archive has no Info.dat", "INVALID_MAP_ARCHIVE"))?;
+        let actual_hash = extracted.get("hash").and_then(Value::as_str).unwrap_or_default();
+        if !actual_hash.eq_ignore_ascii_case(&expected_hash) {
+            return Err(serialized_error("Downloaded map hash does not match BeatSaver", "MAP_HASH_MISMATCH"));
+        }
+        if cancelled.load(Ordering::Relaxed) {
+            return Err(serialized_error("Map download was cancelled", "REQUEST_CANCELLED"));
+        }
+        let had_destination = destination.exists();
+        if had_destination {
+            tokio::fs::rename(&destination, &backup).await
+                .map_err(|error| serialized_error(error.to_string(), "MAP_REPLACE_FAILED"))?;
+        }
+        if let Err(error) = tokio::fs::rename(&staging, &destination).await {
+            if had_destination { let _ = tokio::fs::rename(&backup, &destination).await; }
+            return Err(serialized_error(error.to_string(), "MAP_REPLACE_FAILED"));
+        }
+        if had_destination {
+            let _ = tokio::fs::remove_dir_all(&backup).await;
+        }
+        let final_path = destination.clone();
+        let local_map = tokio::task::spawn_blocking(move || load_map_info(&final_path)).await
+            .map_err(|error| serialized_error(error.to_string(), "MAP_LOAD_FAILED"))?
+            .map_err(|error| serialized_error(error, "MAP_LOAD_FAILED"))?
+            .ok_or_else(|| serialized_error("Installed map has no Info.dat", "MAP_LOAD_FAILED"))?;
+        let event = json!({ "map": local_map, "version": version.cloned().unwrap_or(Value::Null) });
+        let _ = LAST_DOWNLOADED.get_or_init(|| tokio::sync::broadcast::channel(32).0).send(event);
+        Ok(local_map)
+    }.await;
+    let _ = tokio::fs::remove_file(&archive_path).await;
+    if staging.exists() { let _ = tokio::fs::remove_dir_all(&staging).await; }
+    result
+}
+
+async fn download_map_archive(url: &Url, destination: &Path, cancelled: &AtomicBool) -> Result<(), SerializedError> {
+    let response = Client::builder().connect_timeout(Duration::from_secs(20)).timeout(Duration::from_secs(1800))
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            if attempt.previous().len() >= 10 || attempt.url().scheme() != "https" { attempt.stop() } else { attempt.follow() }
+        }))
+        .user_agent(format!("BSManager/{}", env!("CARGO_PKG_VERSION"))).build()
+        .map_err(|error| serialized_error(error.to_string(), "MAP_DOWNLOAD_FAILED"))?
+        .get(url.clone()).send().await.and_then(reqwest::Response::error_for_status)
+        .map_err(|error| serialized_error(error.to_string(), "MAP_DOWNLOAD_FAILED"))?;
+    let expected = response.content_length();
+    let mut received = 0_u64;
+    let mut stream = response.bytes_stream();
+    let mut file = tokio::fs::File::create(destination).await
+        .map_err(|error| serialized_error(error.to_string(), "MAP_DOWNLOAD_FAILED"))?;
+    while let Some(chunk) = stream.next().await {
+        if cancelled.load(Ordering::Relaxed) {
+            drop(file);
+            let _ = tokio::fs::remove_file(destination).await;
+            return Err(serialized_error("Map download was cancelled", "REQUEST_CANCELLED"));
+        }
+        let chunk = match chunk {
+            Ok(chunk) => chunk,
+            Err(error) => {
+                drop(file);
+                let _ = tokio::fs::remove_file(destination).await;
+                return Err(serialized_error(error.to_string(), "MAP_DOWNLOAD_FAILED"));
+            }
+        };
+        file.write_all(&chunk).await
+            .map_err(|error| serialized_error(error.to_string(), "MAP_DOWNLOAD_FAILED"))?;
+        received = received.saturating_add(chunk.len() as u64);
+    }
+    file.flush().await.map_err(|error| serialized_error(error.to_string(), "MAP_DOWNLOAD_FAILED"))?;
+    drop(file);
+    if expected.is_some_and(|expected| expected != received) {
+        let _ = tokio::fs::remove_file(destination).await;
+        return Err(serialized_error("Map archive size did not match the server response", "MAP_DOWNLOAD_TRUNCATED"));
+    }
+    Ok(())
+}
+
+fn extract_map_archive(archive_path: &Path, destination: &Path) -> Result<(), String> {
+    fs::create_dir_all(destination).map_err(|error| error.to_string())?;
+    let file = File::open(archive_path).map_err(|error| error.to_string())?;
+    let mut archive = ZipArchive::new(file).map_err(|error| error.to_string())?;
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).map_err(|error| error.to_string())?;
+        if entry.is_symlink() {
+            return Err("Map archive contains a symbolic link".to_owned());
+        }
+        let relative = entry.enclosed_name().ok_or_else(|| "Map archive contains an unsafe path".to_owned())?.to_path_buf();
+        let output = destination.join(relative);
+        if entry.is_dir() {
+            fs::create_dir_all(&output).map_err(|error| error.to_string())?;
+        } else {
+            if let Some(parent) = output.parent() { fs::create_dir_all(parent).map_err(|error| error.to_string())?; }
+            let mut file = File::create(output).map_err(|error| error.to_string())?;
+            io::copy(&mut entry, &mut file).map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+fn collect_map_archive_files(
+    root: &Path,
+    directory: &Path,
+    archive_prefix: &Path,
+    files: &mut Vec<(PathBuf, String)>,
+) -> io::Result<()> {
+    for entry in fs::read_dir(directory)? {
+        let entry = entry?;
+        let kind = entry.file_type()?;
+        let path = entry.path();
+        if kind.is_symlink() {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "Map library contains a symbolic link"));
+        }
+        if kind.is_dir() {
+            collect_map_archive_files(root, &path, archive_prefix, files)?;
+        } else if kind.is_file() {
+            let relative = path.strip_prefix(root).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+            let name = archive_prefix.join(relative).to_string_lossy().replace('\\', "/");
+            files.push((path, name));
+        }
+    }
+    Ok(())
+}
+
+fn write_map_archive(
+    output: &Path,
+    files: Vec<(PathBuf, String)>,
+    cancelled: Arc<AtomicBool>,
+    progress: tokio::sync::mpsc::UnboundedSender<u64>,
+) -> Result<(), String> {
+    let result = (|| {
+        let file = File::create(output).map_err(|error| error.to_string())?;
+        let mut archive = ZipWriter::new(file);
+        let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated).compression_level(Some(9));
+        for (index, (path, name)) in files.into_iter().enumerate() {
+            if cancelled.load(Ordering::Relaxed) {
+                return Err("Map export was cancelled".to_owned());
+            }
+            archive.start_file(name, options).map_err(|error| error.to_string())?;
+            let mut input = File::open(path).map_err(|error| error.to_string())?;
+            io::copy(&mut input, &mut archive).map_err(|error| error.to_string())?;
+            let _ = progress.send(index as u64 + 1);
+        }
+        archive.finish().map_err(|error| error.to_string())?;
+        Ok(())
+    })();
+    if result.is_err() { let _ = fs::remove_file(output); }
+    result
+}
+
+fn emit_archive_progress<R: Runtime>(
+    window: &WebviewWindow<R>,
+    response_channel: Option<&str>,
+    current: u64,
+    total: u64,
+    output: &str,
+) -> Result<(), SerializedError> {
+    if let Some(channel) = response_channel {
+        window.emit(channel, json!({ "current": current, "total": total, "data": output }))
+            .map_err(|error| serialized_error(error.to_string(), "IPC_EMIT_FAILED"))?;
+    }
+    Ok(())
+}
+
+fn copy_map_directory(source: &Path, destination: &Path) -> Result<(), SerializedError> {
+    let copy_contents = |source: &Path, destination: &Path| -> io::Result<()> {
+        fs::create_dir_all(destination)?;
+        for entry in fs::read_dir(source)? {
+            let entry = entry?;
+            let kind = entry.file_type()?;
+            let from = entry.path();
+            let to = destination.join(entry.file_name());
+            if kind.is_symlink() { return Err(io::Error::new(io::ErrorKind::InvalidData, "Map contains a symbolic link")); }
+            if kind.is_dir() {
+                copy_contents_inner(&from, &to)?;
+            } else if kind.is_file() {
+                fs::copy(from, to)?;
+            }
+        }
+        Ok(())
+    };
+    fn copy_contents_inner(source: &Path, destination: &Path) -> io::Result<()> {
+        fs::create_dir_all(destination)?;
+        for entry in fs::read_dir(source)? {
+            let entry = entry?;
+            let kind = entry.file_type()?;
+            let from = entry.path();
+            let to = destination.join(entry.file_name());
+            if kind.is_symlink() { return Err(io::Error::new(io::ErrorKind::InvalidData, "Map contains a symbolic link")); }
+            if kind.is_dir() { copy_contents_inner(&from, &to)?; }
+            else if kind.is_file() { fs::copy(from, to)?; }
+        }
+        Ok(())
+    }
+    copy_contents(source, destination)
+        .map_err(|error| serialized_error(error.to_string(), "MAP_COPY_FAILED"))
+}
+
+fn sanitize_folder_name(value: &str) -> String {
+    let sanitized = value.chars().map(|character| {
+        if character.is_control() || "<>:\"/\\|?*".contains(character) { '_' } else { character }
+    }).collect::<String>();
+    let sanitized = sanitized.trim().trim_end_matches(['.', ' ']);
+    if sanitized.is_empty() { "map".to_owned() } else { sanitized.to_owned() }
 }
 
 fn map_folder<R: Runtime>(app: &AppHandle<R>, version: &Value) -> Result<PathBuf, SerializedError> {
