@@ -10,6 +10,7 @@ use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
 
 mod library;
+mod linker;
 mod stores;
 mod versions;
 
@@ -472,6 +473,26 @@ async fn handle_request<R: Runtime>(
                 .ok_or_else(|| serialized_error("Full path is required", "INVALID_PATH"))?;
             Ok(json!(versions::relative_path(&version_path, Path::new(full_path)).to_string_lossy().to_string()))
         }
+        "get-linked-folders" => linker::get_linked_folders(app, &args),
+        "link-version-folder-action" => {
+            let app_state = app.state::<AppState>();
+            let _operation = app_state.library_operation.lock().await;
+            let app_handle = app.clone();
+            let request_args = args.clone();
+            tokio::task::spawn_blocking(move || linker::do_action(&app_handle, &request_args))
+                .await
+                .map_err(|error| serialized_error(format!("Folder link worker failed: {error}"), "LINK_FAILED"))?
+        }
+        "is-version-folder-linked" => linker::is_version_folder_linked(app, &args),
+        "relink-all-versions-folders" => {
+            let app_state = app.state::<AppState>();
+            let _operation = app_state.library_operation.lock().await;
+            let app_handle = app.clone();
+            tokio::task::spawn_blocking(move || linker::relink_all(&app_handle))
+                .await
+                .map_err(|error| serialized_error(format!("Folder relink worker failed: {error}"), "LINK_FAILED"))?
+        }
+        "get-shared-folder" => Ok(json!(linker::shared_folder(app)?.to_string_lossy().to_string())),
         "register-maps-deep-link" => set_protocols(app, &["beatsaver", "web+bsmap"], true),
         "unregister-maps-deep-link" => set_protocols(app, &["beatsaver", "web+bsmap"], false),
         "is-map-deep-links-enabled" => are_protocols_registered(app, &["beatsaver", "web+bsmap"]),
