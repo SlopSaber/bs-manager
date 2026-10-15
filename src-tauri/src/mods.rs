@@ -263,7 +263,7 @@ async fn install_mods<R: Runtime>(
         }).await.map_err(|error| serialized_error(error.to_string(), "MOD_INSTALL_FAILED"))?;
         if install_result.is_err() { let _ = tokio::fs::remove_dir_all(&files.0).await; }
         install_result?;
-        if is_bsipa && !root.join("winhttp.dll").is_file() && !execute_ipa(&root, &["-n"]).await? {
+        if is_bsipa && !root.join("winhttp.dll").is_file() && !execute_ipa(&root, &["-n"], &cancelled).await? {
             return Err(serialized_error("BSIPA installation command failed", "cannot-install-bsipa"));
         }
         current += 1;
@@ -362,7 +362,7 @@ async fn uninstall_mods<R: Runtime>(
     emit_progress(window, response_channel, current, total, Value::Null, None)?;
     for full_mod in mods {
         if cancelled.load(Ordering::Relaxed) { return Err(serialized_error("Mod removal was cancelled", "REQUEST_CANCELLED")); }
-        uninstall_one(&root, full_mod).await?;
+        uninstall_one(&root, full_mod, &cancelled).await?;
         current += 1;
         emit_progress(window, response_channel, current, total, Value::Null, None)?;
     }
@@ -373,7 +373,9 @@ async fn uninstall_all_mods<R: Runtime>(
     app: &AppHandle<R>, window: &WebviewWindow<R>, response_channel: Option<&str>, version: &Value,
     cancelled: Arc<AtomicBool>,
 ) -> Result<Value, SerializedError> {
+    if cancelled.load(Ordering::Relaxed) { return Err(serialized_error("Mod removal was cancelled", "REQUEST_CANCELLED")); }
     let available = get_available_mods(version).await?.as_array().cloned().unwrap_or_default();
+    if cancelled.load(Ordering::Relaxed) { return Err(serialized_error("Mod removal was cancelled", "REQUEST_CANCELLED")); }
     let installed = get_installed_mods(app, version).await?.as_array().cloned().unwrap_or_default();
     let mods = installed.into_iter().filter_map(|installed| {
         let mod_id = installed.get("modId")?;
@@ -389,11 +391,12 @@ async fn uninstall_all_mods<R: Runtime>(
     emit_progress(window, response_channel, current, total, Value::Null, None)?;
     for full_mod in &mods {
         if cancelled.load(Ordering::Relaxed) { return Err(serialized_error("Mod removal was cancelled", "REQUEST_CANCELLED")); }
-        uninstall_one(&root, full_mod).await?;
+        uninstall_one(&root, full_mod, &cancelled).await?;
         current += 1;
         emit_progress(window, response_channel, current, total, Value::Null, None)?;
     }
     for relative in ["Plugins", "Libs", "IPA"] {
+        if cancelled.load(Ordering::Relaxed) { return Err(serialized_error("Mod removal was cancelled", "REQUEST_CANCELLED")); }
         let path = root.join(relative);
         if path.exists() {
             tokio::fs::remove_dir_all(&path).await
@@ -403,17 +406,19 @@ async fn uninstall_all_mods<R: Runtime>(
     Ok(Value::Null)
 }
 
-async fn uninstall_one(root: &Path, full_mod: &Value) -> Result<(), SerializedError> {
+async fn uninstall_one(root: &Path, full_mod: &Value, cancelled: &AtomicBool) -> Result<(), SerializedError> {
+    if cancelled.load(Ordering::Relaxed) { return Err(serialized_error("Mod removal was cancelled", "REQUEST_CANCELLED")); }
     let version = full_mod.get("version").unwrap_or(&Value::Null);
     let is_bsipa = full_mod.pointer("/mod/name").and_then(Value::as_str)
         .is_some_and(|name| name.eq_ignore_ascii_case("bsipa"));
     if is_bsipa {
         if root.join("IPA").is_dir() && root.join("IPA.exe").is_file() {
-            let _ = execute_ipa(root, &["--revert", "-n"]).await?;
+            let _ = execute_ipa(root, &["--revert", "-n"], cancelled).await?;
         }
     }
     let hashes = version.get("contentHashes").and_then(Value::as_array).cloned().unwrap_or_default();
     for item in hashes {
+        if cancelled.load(Ordering::Relaxed) { return Err(serialized_error("Mod removal was cancelled", "REQUEST_CANCELLED")); }
         let Some(relative) = item.get("path").and_then(Value::as_str) else { continue; };
         let relative = if is_bsipa {
             relative.replace("IPA/", "").replace("Data", "Beat Saber_Data")
@@ -432,13 +437,22 @@ async fn uninstall_one(root: &Path, full_mod: &Value) -> Result<(), SerializedEr
     Ok(())
 }
 
-async fn execute_ipa(root: &Path, args: &[&str]) -> Result<bool, SerializedError> {
+async fn execute_ipa(root: &Path, args: &[&str], cancelled: &AtomicBool) -> Result<bool, SerializedError> {
+    if cancelled.load(Ordering::Relaxed) {
+        return Err(serialized_error("Mod operation was cancelled", "REQUEST_CANCELLED"));
+    }
     let ipa = root.join("IPA.exe");
     let game = root.join("Beat Saber.exe");
     if !ipa.is_file() || !game.is_file() { return Ok(false); }
     let child = Command::new(ipa).arg(game).args(args).current_dir(root).kill_on_drop(true).spawn()
         .map_err(|error| serialized_error(error.to_string(), "IPA_START_FAILED"))?;
-    match timeout(Duration::from_secs(30), child.wait_with_output()).await {
+    let output = tokio::select! {
+        output = timeout(Duration::from_secs(30), child.wait_with_output()) => output,
+        _ = wait_for_cancellation(cancelled) => {
+            return Err(serialized_error("Mod operation was cancelled", "REQUEST_CANCELLED"));
+        }
+    };
+    match output {
         Ok(Ok(output)) => Ok(output.status.success()),
         Ok(Err(error)) => Err(serialized_error(error.to_string(), "IPA_FAILED")),
         Err(_) => Ok(false),
