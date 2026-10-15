@@ -26,6 +26,8 @@ export class IpcService {
 
         const obs = new Observable<IpcResponseType<C>>(observer => {
             let settled = false;
+            let requestRegistered = false;
+            let cancellationRequested = false;
             const onEvent = (message: IpcStreamMessage<IpcResponseType<C>>) => {
                 if (settled) return;
                 if (message.kind === "value") {
@@ -43,6 +45,12 @@ export class IpcService {
             };
 
             void window.desktop.ipcRenderer.request(requestId, channel as string, data, onEvent)
+                .then(() => {
+                    requestRegistered = true;
+                    if (cancellationRequested) {
+                        void window.desktop.ipcRenderer.cancelRequest(requestId).catch(console.error);
+                    }
+                })
                 .catch(error => {
                     if (!settled) {
                         settled = true;
@@ -53,7 +61,10 @@ export class IpcService {
             return () => {
                 if (!settled) {
                     settled = true;
-                    void window.desktop.ipcRenderer.cancelRequest(requestId).catch(console.error);
+                    cancellationRequested = true;
+                    if (requestRegistered) {
+                        void window.desktop.ipcRenderer.cancelRequest(requestId).catch(console.error);
+                    }
                 }
             };
         }).pipe(defaultValue ? defaultIfEmpty(defaultValue) : identity, share({connector: () => new ReplaySubject(1)}));

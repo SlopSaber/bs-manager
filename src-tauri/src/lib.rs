@@ -1132,7 +1132,7 @@ async fn run_ipc_route<R: Runtime>(
 }
 
 #[tauri::command]
-async fn request<R: Runtime>(
+fn request<R: Runtime>(
     app: AppHandle<R>,
     window: WebviewWindow<R>,
     request_id: String,
@@ -1165,10 +1165,15 @@ async fn request<R: Runtime>(
         responses.insert(request_id.clone(), on_event);
     }
 
-    run_ipc_route(&app, &window, channel, args.unwrap_or(Value::Null), Some(request_id.clone()), cancelled).await;
-
-    if let Ok(mut requests) = state.active_requests.lock() { requests.remove(&request_id); }
-    if let Ok(mut responses) = state.response_channels.lock() { responses.remove(&request_id); }
+    let task_app = app.clone();
+    let task_window = window.clone();
+    let cleanup_id = request_id.clone();
+    tauri::async_runtime::spawn(async move {
+        run_ipc_route(&task_app, &task_window, channel, args.unwrap_or(Value::Null), Some(request_id), cancelled).await;
+        let state = task_app.state::<AppState>();
+        if let Ok(mut requests) = state.active_requests.lock() { requests.remove(&cleanup_id); }
+        if let Ok(mut responses) = state.response_channels.lock() { responses.remove(&cleanup_id); }
+    });
     Ok(())
 }
 
