@@ -11,14 +11,14 @@ pnpm run build:tauri:win
 pnpm run build:tauri:win:replacement
 ```
 
-Each command builds the locked Rust helpers, type-checks the Tauri renderer contracts, builds all six HTML entry pages, compiles the Tauri host, creates an NSIS installer, and writes SHA-256 metadata under `release/tauri/<profile>`. The rewrite-branch Windows workflow provisions Rust, builds both profiles, and uploads installers as artifacts; it runs no tests. Legacy test, lint, and release jobs skip the rewrite branch.
+Each command parses both bundled PowerShell hooks without executing them, builds the locked Rust helpers, type-checks the Tauri renderer contracts, builds all six HTML entry pages, compiles the Tauri host, creates an NSIS installer, and writes SHA-256 metadata under `release/tauri/<profile>`. The rewrite-branch Windows workflow provisions Rust, builds both profiles, and uploads installers as artifacts; it runs no tests. Legacy test, lint, and release jobs skip the rewrite branch.
 
 Signed remote updates are opt-in at compile time. Preview reads `BSM_TAURI_PREVIEW_UPDATE_ENDPOINT` and `BSM_TAURI_PREVIEW_UPDATE_PUBLIC_KEY`; replacement reads `BSM_TAURI_REPLACEMENT_UPDATE_ENDPOINT` and `BSM_TAURI_REPLACEMENT_UPDATE_PUBLIC_KEY`. Set both values for a profile before its build. Endpoint must use HTTPS and return Tauri updater metadata for that profile's channel. Tauri verifies downloaded package signatures before installation. With either value absent, that profile reports no updates and keeps remote updates disabled. Do not reuse Electron update feeds.
 
 Current local installers compile successfully under Node 24.21.0 and are unsigned. All profiles keep Tauri's configured window list empty so startup can choose a target before creating any window: a supported protocol URL or `.bplist` opens its corresponding window without first creating the main window; otherwise the `auto-update` setting selects the launcher when a signed update source is configured, falling back to the main window when updates are disabled or unavailable. The generated NSIS script contains both preinstall and preuninstall hook call sites. The hook code was included in the installer builds, but neither installer has been executed; migration, registry restoration, and uninstall behavior still need user-led review:
 
-- Preview: `release/tauri/preview/BSManager-Preview-1.6.0-x64-setup.exe`, SHA-256 `c91da8a081654f5c1ffe30f48c10bb0a8d6d5f6d815780076191d6778060d698`.
-- Replacement: `release/tauri/replacement/BSManager-1.6.0-x64-setup.exe`, SHA-256 `b888fc0f4cd9aef626f790d1b12cd7aa273c0f937331ac92d51cb61510867fde`.
+- Preview: `release/tauri/preview/BSManager-Preview-1.6.0-x64-setup.exe`, SHA-256 `1170de19aff5542e3e982a3c7e8a4f00218c9fd3d2b5362fb64bb820fbc623d9`.
+- Replacement: `release/tauri/replacement/BSManager-1.6.0-x64-setup.exe`, SHA-256 `a76939bcfeaec9f7a0aef584aba645369abe52b48bcd14bc24ede1dd7060b6d1`.
 
 ## Implemented in the Rust host
 
