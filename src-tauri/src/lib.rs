@@ -12,6 +12,7 @@ use tauri_plugin_opener::OpenerExt;
 mod library;
 mod linker;
 mod stores;
+mod steam;
 mod versions;
 
 const VERSION_LIBRARY: &str = include_str!("../../assets/jsons/bs-versions.json");
@@ -25,6 +26,7 @@ struct AppState {
     window_arguments: Mutex<HashMap<String, Value>>,
     library_operation: tokio::sync::Mutex<()>,
     active_requests: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    steam_download: Mutex<Option<steam::SteamControl>>,
 }
 
 #[derive(Clone, Serialize)]
@@ -335,6 +337,15 @@ async fn handle_request<R: Runtime>(
             let _operation = app_state.library_operation.lock().await;
             versions::import_version(app, window, &args, response_channel, cancelled).await
         }
+        "download-bs-version" | "auto-download-bs-version" | "download-bs-version-qr" => {
+            let app_state = app.state::<AppState>();
+            let _operation = app_state.library_operation.lock().await;
+            let qr = channel == "download-bs-version-qr";
+            let automatic = channel == "auto-download-bs-version";
+            steam::download(app, window, response_channel, &args, cancelled, qr, automatic).await
+        }
+        "stop-download-bs-version" => Ok(steam::stop_download(app)),
+        "send-input-bs-download" => Ok(steam::send_input(app, &args)),
         "current-version" => Ok(json!(env!("CARGO_PKG_VERSION"))),
         "get-available-update" => Ok(Value::Null),
         "check-update" => Ok(json!(false)),
@@ -614,7 +625,7 @@ async fn ipc_send<R: Runtime>(app: AppHandle<R>, window: WebviewWindow<R>, chann
             log::warn!("Windows Tauri one-way route '{channel}' failed: {}", error.message);
         }
     } else {
-        ipc_response(&window, &channel, &request, result, channel == "import-version");
+        ipc_response(&window, &channel, &request, result, matches!(channel.as_str(), "import-version" | "download-bs-version" | "auto-download-bs-version" | "download-bs-version-qr"));
     }
 }
 

@@ -38,7 +38,8 @@
         "resources": [
             "../assets/jsons/bs-versions.json",
             "../assets/jsons/patreons.json",
-            "../assets/proto/song_details_cache_v1.proto"
+        "../assets/proto/song_details_cache_v1.proto",
+        "../assets/scripts/bs-downloader.exe"
         ],
         "windows": {
             "nsis": {
