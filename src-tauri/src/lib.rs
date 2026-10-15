@@ -23,6 +23,7 @@ mod windows_integration;
 mod beat_saver;
 mod maps;
 mod playlists;
+mod mods;
 
 const VERSION_LIBRARY: &str = include_str!("../../assets/jsons/bs-versions.json");
 const SUPPORTERS: &str = include_str!("../../assets/jsons/patreons.json");
@@ -440,6 +441,14 @@ async fn handle_request<R: Runtime>(
             let _operation = app_state.library_operation.lock().await;
             playlists::one_click_install_playlist(app, window, response_channel, &args, cancelled).await
         }
+        "bs-mods.get-available-mods" | "bs-mods.get-installed-mods" | "bs-mods.beatmods-up" => {
+            mods::handle(app, window, channel, &args, response_channel, cancelled).await
+        }
+        "bs-mods.import-mods" | "bs-mods.install-mods" | "bs-mods.uninstall-mods" | "bs-mods.uninstall-all-mods" => {
+            let app_state = app.state::<AppState>();
+            let _operation = app_state.library_operation.lock().await;
+            mods::handle(app, window, channel, &args, response_channel, cancelled).await
+        }
         "bs-maps.download-map" => {
             let app_state = app.state::<AppState>();
             let _operation = app_state.library_operation.lock().await;
@@ -751,7 +760,7 @@ async fn ipc_send<R: Runtime>(app: AppHandle<R>, window: WebviewWindow<R>, chann
             log::warn!("Windows Tauri one-way route '{channel}' failed: {}", error.message);
         }
     } else {
-        ipc_response(&window, &channel, &request, result, matches!(channel.as_str(), "import-version" | "download-bs-version" | "auto-download-bs-version" | "download-bs-version-qr" | "bs-oculus-download" | "bs-launch.launch" | "download-model" | "get-version-models" | "export-models" | "delete-models" | "load-version-maps" | "delete-maps" | "export-maps" | "bs-maps.import-maps" | "get-version-playlists-details" | "import-playlists" | "delete-playlist" | "export-playlists" | "download-playlist" | "one-click-install-playlist" | "last-downloaded-map"));
+        ipc_response(&window, &channel, &request, result, matches!(channel.as_str(), "import-version" | "download-bs-version" | "auto-download-bs-version" | "download-bs-version-qr" | "bs-oculus-download" | "bs-launch.launch" | "download-model" | "get-version-models" | "export-models" | "delete-models" | "load-version-maps" | "delete-maps" | "export-maps" | "bs-maps.import-maps" | "get-version-playlists-details" | "import-playlists" | "delete-playlist" | "export-playlists" | "download-playlist" | "one-click-install-playlist" | "bs-mods.import-mods" | "bs-mods.install-mods" | "bs-mods.uninstall-mods" | "bs-mods.uninstall-all-mods" | "last-downloaded-map"));
     }
 }
 

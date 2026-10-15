@@ -15,8 +15,8 @@ Each command type-checks the Tauri renderer contracts, builds all six HTML entry
 
 Current local installers compile successfully and are unsigned:
 
-- Preview: `release/tauri/preview/BSManager-Preview-1.6.0-x64-setup.exe`, SHA-256 `e32e3cc2ed0834e6fb816baee6b6c80d8c9f327cec8e18543acf4008c94fddb1`.
-- Replacement: `release/tauri/replacement/BSManager-1.6.0-x64-setup.exe`, SHA-256 `8824506328847f99d36872d847334b1a3ab28911b27f412c39a7fb37c6f62948`.
+- Preview: `release/tauri/preview/BSManager-Preview-1.6.0-x64-setup.exe`, SHA-256 `6c698a3722be58643739dc0e51a3a06fd69a19f91b90ffc1fb393867a1c30034`.
+- Replacement: `release/tauri/replacement/BSManager-1.6.0-x64-setup.exe`, SHA-256 `0547b8362ce4db41ce70d6dcb3be2ab3e8c6f28a7f5db09b9419588821a62b16`.
 
 ## Implemented in the Rust host
 
@@ -26,16 +26,17 @@ Current local installers compile successfully and are unsigned:
 - ModelSaber search and lookup; model download, one-click installation, local listing, export, and deletion.
 - BeatSaver map and playlist search/details; local map listing, deletion, import/export, download, and one-click install. Map installs stage archive extraction, compute the Beat Saber hash, validate it against BeatSaver, then move the map into the managed folder.
 - Playlist listing, file import, install, delete, archive export, download, and one-click install. Download progress keeps the renderer’s existing payload shape. Local playlist statistics and cached song detail enrichment remain incomplete.
+- BeatMods availability and health routes; installed-mod discovery, DLL/ZIP import, download and content-hash validation, installation, removal, and remove-all. Archive member paths reject traversal and symbolic links. IPA execution and network cancellation still need runtime review.
 - Static configuration commands preserve unrecognized fields during file round trips. Request streaming and cancellation are bound to the originating window.
 
 These routes compile. Their runtime behavior has not yet passed the user-led acceptance scenarios.
 
 ## Remaining parity work
 
-- Complete route coverage is outstanding. Mod management, map-details cache reads, update download/install, uninstall, several OS-control operations, deep-link delivery for every scheme, and some configuration or library routes still need implementation or parity review. See the route names in `src/shared/models/ipc/ipc-routes.ts` and `src/main/ipcs` as the source inventory.
+- Complete route coverage is outstanding. Map-details cache reads, update download/install, uninstall, several OS-control operations, deep-link delivery for every scheme, and some configuration or library routes still need implementation or parity review. See the route names in `src/shared/models/ipc/ipc-routes.ts` and `src/main/ipcs` as the source inventory.
 - Verify six-window behavior and window-specific capabilities. The shared renderer entry pages exist, but the auxiliary window lifecycle and remote authentication/webview isolation need acceptance review.
 - Finish preview settings and library import behavior, replacement backup and legacy uninstallation, installer failure recovery, protocol ownership restoration, and rollback instructions. Replacement is not ready to replace an installed Electron build.
-- Complete Meta and Steam credential migration, download resume/error paths, map and playlist cache parity, mods, content sharing, archive safety, relocation, shortcuts, LIV integration, proxy behavior, process tracking, and update signing configuration.
+- Complete Meta and Steam credential migration, download resume/error paths, map and playlist cache parity, mod dependency and IPA behavior, content sharing, archive interruption recovery, relocation, shortcuts, LIV integration, proxy behavior, process tracking, and update signing configuration.
 - Complete visual comparison at 100%, 125%, and 150% display scaling, in light and dark themes, with custom colors and default, minimum, and maximized window sizes. Build success does not establish visual or functional parity.
 
 Keep the existing Electron installer for rollback. Current Tauri installers are local build artifacts only. Do not distribute or install the replacement profile until migration, installer recovery, runtime parity, and visual review are complete.
