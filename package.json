@@ -24,7 +24,7 @@
         "start": "tsx ./.erb/scripts/check-port-in-use.js && cross-env NODE_ENV=development electron-vite dev",
         "preview": "cross-env NODE_ENV=production electron-vite preview --skipBuild",
         "dev:tauri": "vite --config vite.config.mts --host 127.0.0.1 --port 1420 --strictPort",
-        "build:tauri:ui": "vite build --config vite.config.mts",
+        "build:tauri:ui": "tsc --project tsconfig.tauri-contracts.json --noEmit --pretty false && vite build --config vite.config.mts",
         "tauri": "tauri",
         "build:tauri:win": "pnpm run build:tauri:ui && tauri build --target x86_64-pc-windows-msvc --config src-tauri/tauri.preview.conf.json --bundles nsis && node scripts/collect-tauri-installer.mjs preview",
         "build:tauri:win:replacement": "pnpm run build:tauri:ui && tauri build --target x86_64-pc-windows-msvc --config src-tauri/tauri.replacement.conf.json --bundles nsis && node scripts/collect-tauri-installer.mjs replacement",

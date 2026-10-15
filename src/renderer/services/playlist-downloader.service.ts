@@ -2,7 +2,7 @@ import { BehaviorSubject, Observable, Subject, Subscription, distinctUntilChange
 import { BPList, DownloadPlaylistProgressionData } from "shared/models/playlists/playlist.interface";
 import { IpcService } from "./ipc.service";
 import { ProgressBarService } from "./progress-bar.service";
-import { Progression } from "main/helpers/fs.helpers";
+import type { Progression } from "shared/models/progression.model";
 import equal from "fast-deep-equal";
 import { BSVersion } from "shared/bs-version.interface";
 import { LocalBPListsDetails } from "shared/models/playlists/local-playlist.models";

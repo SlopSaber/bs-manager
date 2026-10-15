@@ -1,7 +1,7 @@
 import { IpcService } from "./ipc.service";
 import { ProgressBarService } from "./progress-bar.service";
 import { Observable, lastValueFrom } from "rxjs";
-import { Progression } from "main/helpers/fs.helpers";
+import type { Progression } from "shared/models/progression.model";
 
 
 export interface Changelog {

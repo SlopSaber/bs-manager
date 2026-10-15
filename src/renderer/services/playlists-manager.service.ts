@@ -2,7 +2,7 @@ import { BSVersion } from "shared/bs-version.interface";
 import { IpcService } from "./ipc.service";
 import { Observable, Subject, Subscription, catchError, distinctUntilChanged, filter, lastValueFrom, map, of } from "rxjs";
 import { FolderLinkState, VersionFolderLinkerService } from "./version-folder-linker.service";
-import { Progression } from "main/helpers/fs.helpers";
+import type { Progression } from "shared/models/progression.model";
 import { LocalBPList, LocalBPListsDetails } from "shared/models/playlists/local-playlist.models";
 import { ModalExitCode, ModalService } from "./modale.service";
 import { BsmLocalMap } from "shared/models/maps/bsm-local-map.interface";

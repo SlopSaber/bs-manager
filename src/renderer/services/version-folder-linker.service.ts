@@ -1,4 +1,7 @@
-import { LinkOptions, UnlinkOptions } from "main/services/folder-linker.service";
+import { VersionLinkerActionType } from "shared/models/version-linker.model";
+import type { VersionLinkFolderAction, VersionLinkerAction, VersionUnlinkFolderAction } from "shared/models/version-linker.model";
+export type { LinkOptions, UnlinkOptions, VersionLinkerAction, VersionLinkFolderAction, VersionUnlinkFolderAction } from "shared/models/version-linker.model";
+export { VersionLinkerActionType } from "shared/models/version-linker.model";
 import { map, distinctUntilChanged, filter, mergeMap, shareReplay } from "rxjs/operators";
 import { BehaviorSubject, lastValueFrom, Observable, of } from "rxjs";
 import { BSVersion } from "shared/bs-version.interface";
@@ -187,21 +190,6 @@ export class VersionFolderLinkerService {
         return this.ipcService.sendV2("get-shared-folder");
     }
 }
-
-export const enum VersionLinkerActionType {
-    Link = "link",
-    Unlink = "unlink",
-}
-
-export interface VersionLinkerAction {
-    version: BSVersion;
-    relativeFolder: string;
-    type: VersionLinkerActionType;
-    options?: LinkOptions;
-}
-
-export type VersionLinkFolderAction = Omit<VersionLinkerAction, "type">;
-export type VersionUnlinkFolderAction = Omit<VersionLinkerAction, "type"> & { options: UnlinkOptions };
 
 export type VersionLinkerActionListener = (action: VersionLinkerAction, linked: boolean) => void;
 

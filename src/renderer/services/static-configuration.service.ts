@@ -1,4 +1,4 @@
-import { StaticConfigKeys, StaticConfigKeyValues } from "main/services/static-configuration.service";
+import type { StaticConfigKeys, StaticConfigKeyValues } from "shared/models/static-configuration.model";
 import { IpcService } from "./ipc.service";
 import { lastValueFrom } from "rxjs";
 

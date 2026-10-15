@@ -5,7 +5,8 @@ import { Progression, ensurePathNotAlreadyExist } from "../../helpers/fs.helpers
 import { BSLocalVersionService } from "../bs-local-version.service";
 import { Observable, finalize, map, of, switchMap } from "rxjs";
 import path from "path";
-import { DownloadInfo } from "./bs-steam-downloader.service";
+import type { OculusDownloadInfo } from "../../../shared/models/bs-version-download/download-info.model";
+export type { OculusDownloadInfo } from "../../../shared/models/bs-version-download/download-info.model";
 import { BsStore } from "../../../shared/models/bs-store.enum";
 import { isOculusTokenValid } from "../../../shared/helpers/oculus.helpers";
 import { CustomError } from "shared/models/exceptions/custom-error.class";
@@ -133,8 +134,4 @@ export class BsOculusDownloaderService {
         return session.defaultSession.cookies.get({ domain: ".oculus.com" }).then(cookies => cookies.length > 0);
     }
 
-}
-
-export interface OculusDownloadInfo extends DownloadInfo {
-    token: string;
 }

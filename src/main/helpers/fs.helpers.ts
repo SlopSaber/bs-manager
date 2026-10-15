@@ -7,7 +7,8 @@ import crypto from "crypto";
 import { execSync } from "child_process";
 import { tryit } from "../../shared/helpers/error.helpers";
 import { CustomError } from "shared/models/exceptions/custom-error.class";
-import { ErrorObject } from "serialize-error";
+import type { Progression } from "shared/models/progression.model";
+export type { Progression } from "shared/models/progression.model";
 
 export async function pathExist(path: string): Promise<boolean> {
     try {
@@ -398,13 +399,4 @@ export async function getSize(targetPath: string, maxDepth = 5): Promise<number>
     };
 
     return computeSize(targetPath, 0);
-}
-
-export interface Progression<T = unknown, D = unknown> {
-    total: number;
-    current: number;
-    diff?: number;
-    data?: T;
-    extra?: D;
-    lastError?: ErrorObject;
 }

@@ -4,7 +4,7 @@ import { BSVersion } from "shared/bs-version.interface";
 import { IpcService } from "./ipc.service";
 import { ProgressBarService } from "./progress-bar.service";
 import { NotificationService } from "./notification.service";
-import { Progression } from "main/helpers/fs.helpers";
+import type { Progression } from "shared/models/progression.model";
 import { ProgressionInterface } from "shared/models/progress-bar";
 import { BbmFullMod, BbmModVersion, BbmCategories, BbmStatus } from "shared/models/mods/mod.interface";
 import { logRenderError } from "renderer";

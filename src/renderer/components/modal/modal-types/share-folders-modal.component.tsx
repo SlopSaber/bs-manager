@@ -11,7 +11,8 @@ import { BSVersionManagerService } from "renderer/services/bs-version-manager.se
 import { ConfigurationService } from "renderer/services/configuration.service";
 import { IpcService } from "renderer/services/ipc.service";
 import { ModalComponent, ModalService } from "renderer/services/modale.service";
-import { FolderLinkState, VersionFolderLinkerService, VersionLinkerActionType } from "renderer/services/version-folder-linker.service";
+import { VersionLinkerActionType } from "shared/models/version-linker.model";
+import { FolderLinkState, VersionFolderLinkerService } from "renderer/services/version-folder-linker.service";
 import { combineLatest, lastValueFrom, map, of } from "rxjs";
 import { BSVersion } from "shared/bs-version.interface";
 import { NotificationService } from "renderer/services/notification.service";

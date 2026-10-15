@@ -13,7 +13,7 @@ import { map, last, catchError, filter, distinctUntilChanged } from "rxjs/operat
 import { ProgressionInterface } from "shared/models/progress-bar";
 import { FolderLinkState, VersionFolderLinkerService } from "./version-folder-linker.service";
 import { SongDetails } from "shared/models/maps";
-import { Progression } from "main/helpers/fs.helpers";
+import type { Progression } from "shared/models/progression.model";
 import { DeleteDuplicateMapsModal } from "renderer/components/modal/modal-types/delete-duplicate-maps-modal.component";
 import equal from "fast-deep-equal";
 

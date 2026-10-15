@@ -1,7 +1,7 @@
 import { Observable, Subscription, catchError, finalize, lastValueFrom, map, noop, of, take, tap } from "rxjs";
 import { BSVersion } from "shared/bs-version.interface";
 import { IpcService } from "../ipc.service";
-import { Progression } from "main/helpers/fs.helpers";
+import type { Progression } from "shared/models/progression.model";
 import { ProgressBarService } from "../progress-bar.service";
 import { CustomError } from "shared/models/exceptions/custom-error.class";
 import { NotificationService } from "../notification.service";
@@ -10,7 +10,7 @@ import { DownloaderServiceInterface } from "./bs-store-downloader.interface";
 import { AbstractBsDownloaderService } from "./abstract-bs-downloader.service";
 import { MetaAuthErrorCodes, OculusDownloaderErrorCodes } from "shared/models/bs-version-download/oculus-download.model";
 import { LoginToMetaModal } from "renderer/components/modal/modal-types/bs-downgrade/login-to-meta-modal.component";
-import { OculusDownloadInfo } from "main/services/bs-version-download/bs-oculus-downloader.service";
+import type { OculusDownloadInfo } from "shared/models/bs-version-download/download-info.model";
 import { Notification } from "shared/models/notification/notification.model";
 import { LinkOpenerService } from "../link-opener.service";
 

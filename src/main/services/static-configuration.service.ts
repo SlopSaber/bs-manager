@@ -1,7 +1,7 @@
 import ElectronStore from "electron-store";
 import { Observable, Subject } from "rxjs";
-import { BSVersion } from "shared/bs-version.interface";
-import { AutoUpdate } from "shared/models/config";
+import type { StaticConfigKeys, StaticConfigKeyValues } from "../../shared/models/static-configuration.model";
+export type { StaticConfigGetIpcRequestResponse, StaticConfigKeys, StaticConfigKeyValues, StaticConfigSetIpcRequest } from "../../shared/models/static-configuration.model";
 
 export class StaticConfigurationService {
     private static instance: StaticConfigurationService;
@@ -59,30 +59,3 @@ export class StaticConfigurationService {
         return this.watchers[key];
     }
 }
-
-export interface StaticConfigKeyValues {
-    "installation-folder": string;
-    "song-details-cache-etag": string;
-    "disable-hadware-acceleration": boolean;
-    "use-symlinks": boolean;
-    "use-system-proxy": boolean;
-    "close-bs-manager-on-launch": boolean;
-    "last-version-launched": BSVersion;
-    "auto-update": AutoUpdate;
-
-    // Linux Specific static configs
-    "proton-folder": string;
-    "versions": BSVersion[];
-};
-
-export type StaticConfigKeys = keyof StaticConfigKeyValues;
-
-export type StaticConfigGetIpcRequestResponse<K extends StaticConfigKeys> = {
-    request: K;
-    response: StaticConfigKeyValues[K];
-};
-
-export type StaticConfigSetIpcRequest<K extends StaticConfigKeys> = {
-    request: { key: K, value: StaticConfigKeyValues[K] };
-    response: void;
-};

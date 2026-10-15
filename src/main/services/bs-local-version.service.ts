@@ -18,6 +18,8 @@ import { BsStore } from "../../shared/models/bs-store.enum";
 import { CustomError } from "../../shared/models/exceptions/custom-error.class";
 import crypto from "crypto";
 import { StaticConfigurationService } from "./static-configuration.service";
+import type { ImportVersionOptions } from "../../shared/models/bs-version-import.model";
+export type { ImportVersionOptions } from "../../shared/models/bs-version-import.model";
 
 
 export class BSLocalVersionService {
@@ -421,9 +423,4 @@ export class BSLocalVersionService {
     public get loadedVersions$(): Observable<BSVersion[]>{
         return this._loadedVersions$.asObservable();
     }
-}
-
-export interface ImportVersionOptions {
-    fromPath: string;
-    store: BsStore
 }

@@ -1,10 +1,10 @@
 import { getFoldersInFolder } from "../helpers/fs.helpers";
 import path from "path";
-import { VersionLinkerAction, VersionUnlinkFolderAction } from "renderer/services/version-folder-linker.service";
+import type { VersionLinkerAction, VersionUnlinkFolderAction, LinkOptions } from "../../shared/models/version-linker.model";
 import { BSVersion } from "shared/bs-version.interface";
 import { LocalMapsManagerService } from "./additional-content/maps/local-maps-manager.service";
 import { BSLocalVersionService } from "./bs-local-version.service";
-import { FolderLinkerService, LinkOptions } from "./folder-linker.service";
+import { FolderLinkerService } from "./folder-linker.service";
 import { allSettled } from "../../shared/helpers/promise.helpers";
 
 export class VersionFolderLinkerService {

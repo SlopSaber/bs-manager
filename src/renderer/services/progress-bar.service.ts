@@ -4,7 +4,7 @@ import { IpcService } from "./ipc.service";
 import { NotificationService } from "./notification.service";
 import { CSSProperties } from "react";
 import { ProgressionInterface } from "shared/models/progress-bar";
-import { Progression } from "main/helpers/fs.helpers";
+import type { Progression } from "shared/models/progression.model";
 
 export class ProgressBarService {
     private static instance: ProgressBarService;

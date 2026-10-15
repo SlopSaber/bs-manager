@@ -7,7 +7,7 @@ import { ProgressBarService } from "./progress-bar.service";
 import { EditVersionModal } from "renderer/components/modal/modal-types/edit-version-modal.component";
 import { popElement } from "shared/helpers/array.helpers";
 import { ImportVersionModal } from "renderer/components/modal/modal-types/import-version-modal.component";
-import { Progression } from "main/helpers/fs.helpers";
+import type { Progression } from "shared/models/progression.model";
 import { CustomError } from "shared/models/exceptions/custom-error.class";
 import { logRenderError } from "renderer";
 

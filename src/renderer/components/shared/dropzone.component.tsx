@@ -6,7 +6,7 @@ import { useThemeColor } from "renderer/hooks/use-theme-color.hook";
 import Color from "color";
 import { cn } from "renderer/helpers/css-class.helpers";
 import { CloseIcon } from "../svgs/icons/close-icon.component";
-import { OpenDialogOptions } from "electron";
+import type { OpenDialogOptions } from "shared/models/os/dialog.model";
 import { useTranslation } from "renderer/hooks/use-translation.hook";
 import { useService } from "renderer/hooks/use-service.hook";
 import { IpcService } from "renderer/services/ipc.service";

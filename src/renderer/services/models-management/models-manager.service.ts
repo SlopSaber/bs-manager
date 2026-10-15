@@ -5,7 +5,7 @@ import { MODEL_TYPE_FOLDERS } from "shared/models/models/constants";
 import { Observable, lastValueFrom, map } from "rxjs";
 import { BSVersion } from "shared/bs-version.interface";
 import { ModalExitCode, ModalService } from "../modale.service";
-import { Progression } from "main/helpers/fs.helpers";
+import type { Progression } from "shared/models/progression.model";
 import { BsmLocalModel } from "shared/models/models/bsm-local-model.interface";
 import { ProgressBarService } from "../progress-bar.service";
 import { ProgressionInterface } from "shared/models/progress-bar";

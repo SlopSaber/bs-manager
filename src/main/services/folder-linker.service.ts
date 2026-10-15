@@ -10,6 +10,8 @@ import { StaticConfigurationService } from "./static-configuration.service";
 import { randomUUID } from "crypto";
 import { CustomError } from "shared/models/exceptions/custom-error.class";
 import { tryit } from "shared/helpers/error.helpers";
+import type { LinkOptions, UnlinkOptions } from "../../shared/models/version-linker.model";
+export type { LinkOptions, UnlinkOptions } from "../../shared/models/version-linker.model";
 
 export class FolderLinkerService {
     private static instance: FolderLinkerService;
@@ -175,14 +177,4 @@ export class FolderLinkerService {
         }
         return false;
     }
-}
-
-export interface LinkOptions {
-    keepContents?: boolean;
-    intermediateFolder?: string;
-    backup?: boolean;
-}
-
-export interface UnlinkOptions extends LinkOptions {
-    moveContents?: boolean;
 }

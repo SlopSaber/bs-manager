@@ -12,7 +12,7 @@ import BeatConflict from "../../../../assets/images/apngs/beat-conflict.png";
 import { BehaviorSubject, distinctUntilChanged, map, startWith } from "rxjs";
 import { BsmButton } from "../shared/bsm-button.component";
 import equal from "fast-deep-equal";
-import { VersionLinkerAction } from "renderer/services/version-folder-linker.service";
+import type { VersionLinkerAction } from "shared/models/version-linker.model";
 import { MODEL_TYPE_FOLDERS } from "shared/models/models/constants";
 import { useService } from "renderer/hooks/use-service.hook";
 import { ModelsDownloaderService } from "renderer/services/models-management/models-downloader.service";

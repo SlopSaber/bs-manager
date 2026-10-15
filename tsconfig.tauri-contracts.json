@@ -1,0 +1,28 @@
+{
+    "extends": "./tsconfig.json",
+    "compilerOptions": {
+        "noEmit": true,
+        "declaration": false,
+        "declarationMap": false,
+        "sourceMap": false,
+        "skipLibCheck": true
+    },
+    "include": [
+        "src/shared/models/ipc/ipc-routes.ts",
+        "src/shared/models/progression.model.ts",
+        "src/shared/models/bs-version-import.model.ts",
+        "src/shared/models/bs-version-download/download-info.model.ts",
+        "src/shared/models/models/model-download.model.ts",
+        "src/shared/models/version-linker.model.ts",
+        "src/shared/models/static-configuration.model.ts",
+        "src/shared/models/update-info.model.ts",
+        "src/shared/models/os/dialog.model.ts"
+    ],
+    "exclude": [
+        "node_modules",
+        "release",
+        "src-tauri",
+        "src/__tests__",
+        "test"
+    ]
+}

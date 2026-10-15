@@ -13,6 +13,8 @@ import { loadSteamDownloadSession, saveSteamDownloadSession } from "./steam-down
 import { app } from "electron";
 import { BsStore } from "../../../shared/models/bs-store.enum";
 import { CustomError } from "shared/models/exceptions/custom-error.class";
+import type { DownloadSteamInfo } from "../../../shared/models/bs-version-download/download-info.model";
+export type { DownloadInfo, DownloadSteamInfo } from "../../../shared/models/bs-version-download/download-info.model";
 
 export class BsSteamDownloaderService {
     private static instance: BsSteamDownloaderService;
@@ -141,15 +143,4 @@ export class BsSteamDownloaderService {
         this.requestId++;
         this.depotDownloader?.stop();
     }
-}
-
-export interface DownloadInfo {
-    bsVersion: BSVersion;
-    isVerification?: boolean;
-    stay?: boolean;
-}
-
-export interface DownloadSteamInfo extends DownloadInfo {
-    username?: string;
-    password?: string;
 }

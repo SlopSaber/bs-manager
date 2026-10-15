@@ -1,4 +1,4 @@
-import { DownloadSteamInfo } from "main/services/bs-version-download/bs-steam-downloader.service";
+import type { DownloadSteamInfo } from "shared/models/bs-version-download/download-info.model";
 import { BehaviorSubject, Observable, ReplaySubject, Subscription, lastValueFrom, throwError } from "rxjs";
 import { filter, map, share, take, tap, throttleTime } from "rxjs/operators";
 import { BSVersion } from "shared/bs-version.interface";

@@ -7,6 +7,8 @@ import { IpcService } from "../ipc.service";
 import { DownloadModelsModal } from "renderer/components/modal/modal-types/models/download-models-modal.component";
 import { ProgressBarService } from "../progress-bar.service";
 import { ProgressionInterface } from "shared/models/progress-bar";
+import type { ModelDownload } from "shared/models/models/model-download.model";
+export type { ModelDownload } from "shared/models/models/model-download.model";
 import equal from "fast-deep-equal";
 
 export class ModelsDownloaderService {
@@ -132,8 +134,3 @@ export class ModelsDownloaderService {
         return res;
     }
 }
-
-export type ModelDownload = {
-    model: MSModel;
-    version: BSVersion;
-};

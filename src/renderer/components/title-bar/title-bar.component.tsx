@@ -15,7 +15,7 @@ import { useTranslationV2 } from "renderer/hooks/use-translation.hook";
 import Tippy from "@tippyjs/react";
 import { StaticConfigurationService } from "renderer/services/static-configuration.service";
 import { AutoUpdate } from "shared/models/config";
-import { UpdateInfo } from "electron-updater";
+import type { UpdateInfo } from "shared/models/update-info.model";
 
 function useVersion() {
     const ipcService = useService(IpcService);
