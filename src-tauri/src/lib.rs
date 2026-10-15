@@ -13,6 +13,7 @@ const VERSION_LIBRARY: &str = include_str!("../../assets/jsons/bs-versions.json"
 const SUPPORTERS: &str = include_str!("../../assets/jsons/patreons.json");
 const INSTALL_FOLDER: &str = "BSManager";
 const INSTANCES_FOLDER: &str = "BSInstances";
+const LEGACY_APP_DIRECTORY: &str = "bs-manager";
 
 #[derive(Default)]
 struct AppState {
@@ -43,7 +44,14 @@ fn home_directory<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
 }
 
 fn settings_path<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
-    app.path().app_config_dir()
+    let resolver = app.path();
+    if app.config().identifier == "io.bsmanager.bsmanager" {
+        return resolver.config_dir()
+            .map(|directory| directory.join(LEGACY_APP_DIRECTORY).join("config.json"))
+            .map_err(|error| error.to_string());
+    }
+
+    resolver.app_config_dir()
         .map(|directory| directory.join("config.json"))
         .map_err(|error| error.to_string())
 }
@@ -68,13 +76,39 @@ fn write_settings<R: Runtime>(app: &AppHandle<R>, settings: &Map<String, Value>)
     fs::rename(&temporary, &path).map_err(|error| format!("Could not replace settings: {error}"))
 }
 
-fn install_directory<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
-    if let Some(path) = read_settings(app)?.get("installation-folder").and_then(Value::as_str) {
-        return Ok(PathBuf::from(path));
-    }
+fn default_install_directory<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
     let documents_path = app.path().document_dir().map_err(|error| error.to_string())?.join(INSTALL_FOLDER);
     if documents_path.is_dir() { return Ok(documents_path); }
     Ok(home_directory(app)?.join(INSTALL_FOLDER))
+}
+
+fn path_ends_in_install_folder(path: &Path) -> bool {
+    path.file_name().and_then(|name| name.to_str())
+        .is_some_and(|name| name.eq_ignore_ascii_case(INSTALL_FOLDER))
+}
+
+fn normalize_install_parent(path: PathBuf) -> PathBuf {
+    if path_ends_in_install_folder(&path) {
+        if let Some(parent) = path.parent() {
+            return parent.to_path_buf();
+        }
+    }
+    path
+}
+
+fn install_directory<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
+    if let Some(path) = read_settings(app)?.get("installation-folder")
+        .and_then(Value::as_str).filter(|path| !path.is_empty())
+    {
+        let path = PathBuf::from(path);
+        // Accept early preview values that stored the full BSManager path.
+        return if path_ends_in_install_folder(&path) {
+            Ok(path)
+        } else {
+            Ok(path.join(INSTALL_FOLDER))
+        };
+    }
+    default_install_directory(app)
 }
 
 fn resolve_window(template: &str) -> Option<(&'static str, &'static str, f64, f64, f64, f64, bool)> {
@@ -273,18 +307,20 @@ async fn handle_request<R: Runtime>(app: &AppHandle<R>, window: &WebviewWindow<R
         "get-supporters" => serde_json::from_str(SUPPORTERS)
             .map_err(|error| serialized_error(error.to_string(), "SUPPORTERS_READ_FAILED")),
         "bs-installer.folder-exists" => Ok(json!(install_directory(app).map_err(|error| serialized_error(error, "INSTALL_PATH_FAILED"))?.is_dir())),
-        "bs-installer.default-install-path" => Ok(json!(home_directory(app).map_err(|error| serialized_error(error, "INSTALL_PATH_FAILED"))?.join(INSTALL_FOLDER))),
+        "bs-installer.default-install-path" => Ok(json!(default_install_directory(app).map_err(|error| serialized_error(error, "INSTALL_PATH_FAILED"))?)),
         "bs-installer.install-path" => Ok(json!(install_directory(app).map_err(|error| serialized_error(error, "INSTALL_PATH_FAILED"))?)),
         "bs-installer.set-install-path" => {
-            let path = args.get("path").and_then(Value::as_str).filter(|value| !value.is_empty())
+            let path = args.get("path").and_then(Value::as_str).filter(|value| !value.trim().is_empty())
                 .ok_or_else(|| serialized_error("Install path is required", "INVALID_INSTALL_PATH"))?;
             if args.get("move").and_then(Value::as_bool).unwrap_or(false) {
                 return Err(serialized_error("Moving an existing library is not available in this preview", "NOT_IMPLEMENTED"));
             }
             let mut settings = read_settings(app).map_err(|error| serialized_error(error, "SETTINGS_READ_FAILED"))?;
-            settings.insert("installation-folder".into(), json!(path));
+            let parent = normalize_install_parent(PathBuf::from(path.trim()));
+            let install_path = parent.join(INSTALL_FOLDER);
+            settings.insert("installation-folder".into(), json!(parent));
             write_settings(app, &settings).map_err(|error| serialized_error(error, "SETTINGS_WRITE_FAILED"))?;
-            Ok(json!(path))
+            Ok(json!(install_path))
         }
         "static-configuration.get" => {
             let key = args.as_str().ok_or_else(|| serialized_error("Setting key is required", "INVALID_SETTING"))?;
