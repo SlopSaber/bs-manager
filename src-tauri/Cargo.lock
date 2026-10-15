@@ -353,6 +353,7 @@ dependencies = [
  "url",
  "urlencoding",
  "uuid",
+ "winreg",
 ]
 
 [[package]]

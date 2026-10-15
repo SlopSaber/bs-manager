@@ -131,6 +131,10 @@ pub async fn import_version<R: Runtime>(
 }
 
 fn identify_version(source: &Path) -> Result<Value, SerializedError> {
+    identify_version_with_store(source, None)
+}
+
+fn identify_version_with_store(source: &Path, store: Option<&str>) -> Result<Value, SerializedError> {
     if !source.join("Beat Saber.exe").is_file() {
         return Err(serialized_error("Selected folder is not a Beat Saber installation", "NOT_BS_FOLDER"));
     }
@@ -146,12 +150,12 @@ fn identify_version(source: &Path) -> Result<Value, SerializedError> {
     let object = version.as_object_mut().ok_or_else(|| serialized_error("Version catalog entry is invalid", "VERSION_LIBRARY_READ_FAILED"))?;
     let folder_name = source.file_name().and_then(|name| name.to_str()).unwrap_or_default();
     let game_version = object.get("BSVersion").and_then(Value::as_str).unwrap_or_default();
-    if folder_name != game_version {
+    if store.is_none() && folder_name != game_version {
         object.insert("name".into(), json!(folder_name));
     }
     object.insert("path".into(), json!(source));
-    object.insert("steam".into(), json!(false));
-    object.insert("oculus".into(), json!(false));
+    object.insert("steam".into(), json!(store == Some("steam")));
+    object.insert("oculus".into(), json!(store == Some("oculus")));
     Ok(version)
 }
 
@@ -234,16 +238,27 @@ pub fn get_installed_versions<R: Runtime>(app: &AppHandle<R>) -> Result<Value, S
     let catalog = serde_json::from_str::<Vec<Value>>(super::VERSION_LIBRARY)
         .map_err(|error| serialized_error(error.to_string(), "VERSION_LIBRARY_READ_FAILED"))?;
 
+    let mut installed = Vec::new();
+    for (store, path) in [
+        ("steam", super::stores::steam_game_folder()),
+        ("oculus", super::stores::oculus_game_folder()),
+    ] {
+        if let Some(path) = path {
+            if let Ok(version) = identify_version_with_store(&path, Some(store)) {
+                installed.push(version);
+            }
+        }
+    }
+
     let entries = match fs::read_dir(&version_root) {
         Ok(entries) => Some(entries),
         Err(error) if error.kind() == io::ErrorKind::NotFound => None,
         Err(error) => return Err(serialized_error(error.to_string(), "INSTALL_PATH_FAILED")),
     };
     let Some(entries) = entries else {
-        return Ok(json!([]));
+        return Ok(json!(installed));
     };
 
-    let mut installed = Vec::new();
     for entry in entries {
         let entry = entry.map_err(|error| serialized_error(error.to_string(), "INSTALL_PATH_FAILED"))?;
         let path = entry.path();
@@ -298,6 +313,14 @@ pub fn get_installed_versions<R: Runtime>(app: &AppHandle<R>) -> Result<Value, S
 }
 
 pub fn version_path<R: Runtime>(app: &AppHandle<R>, version: &Value) -> Result<PathBuf, SerializedError> {
+    if version.get("steam").and_then(Value::as_bool).unwrap_or(false) {
+        return super::stores::steam_game_folder()
+            .ok_or_else(|| serialized_error("Beat Saber Steam installation not found", "VersionNotFound"));
+    }
+    if version.get("oculus").and_then(Value::as_bool).unwrap_or(false) {
+        return super::stores::oculus_game_folder()
+            .ok_or_else(|| serialized_error("Beat Saber Meta installation not found", "VersionNotFound"));
+    }
     let folder = version.get("name").and_then(Value::as_str).filter(|name| !name.is_empty())
         .or_else(|| version.get("BSVersion").and_then(Value::as_str))
         .ok_or_else(|| serialized_error("Version folder name is required", "INVALID_VERSION"))?;

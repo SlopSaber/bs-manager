@@ -10,6 +10,7 @@ use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
 
 mod library;
+mod stores;
 mod versions;
 
 const VERSION_LIBRARY: &str = include_str!("../../assets/jsons/bs-versions.json");
