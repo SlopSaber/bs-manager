@@ -298,6 +298,7 @@ async fn download_model_file<R: Runtime>(
     tokio::fs::create_dir_all(destination.parent().unwrap_or(Path::new("."))).await
         .map_err(|error| serialized_error(error.to_string(), "MODEL_PATH_FAILED"))?;
     ensure_safe_model_destination(&destination).await?;
+    let staging = destination.with_file_name(format!(".bsmanager-model-download-{}", uuid::Uuid::new_v4()));
     if cancelled.load(Ordering::Relaxed) {
         return Err(serialized_error("Model download was cancelled", "REQUEST_CANCELLED"));
     }
@@ -320,55 +321,59 @@ async fn download_model_file<R: Runtime>(
         .map_err(|error| serialized_error(error.to_string(), "MODEL_DOWNLOAD_FAILED"))?;
     let total = response.content_length().unwrap_or_default();
     let mut stream = response.bytes_stream();
-    let mut output = tokio::fs::File::create(&destination).await
+    let mut output = tokio::fs::OpenOptions::new().write(true).create_new(true).open(&staging).await
         .map_err(|error| serialized_error(error.to_string(), "MODEL_DOWNLOAD_FAILED"))?;
     let mut hasher = md5::Context::new();
     let mut current = 0_u64;
     if let Err(error) = emit_download_progress(window, response_channel, 0, total, &destination, Value::Null) {
         drop(output);
-        let _ = tokio::fs::remove_file(&destination).await;
+        let _ = tokio::fs::remove_file(&staging).await;
         return Err(error);
     }
     while let Some(chunk) = stream.next().await {
         if cancelled.load(Ordering::Relaxed) {
             drop(output);
-            let _ = tokio::fs::remove_file(&destination).await;
+            let _ = tokio::fs::remove_file(&staging).await;
             return Err(serialized_error("Model download was cancelled", "REQUEST_CANCELLED"));
         }
         let chunk = match chunk {
             Ok(chunk) => chunk,
             Err(error) => {
                 drop(output);
-                let _ = tokio::fs::remove_file(&destination).await;
+                let _ = tokio::fs::remove_file(&staging).await;
                 return Err(serialized_error(error.to_string(), "MODEL_DOWNLOAD_FAILED"));
             }
         };
         if let Err(error) = output.write_all(&chunk).await {
             drop(output);
-            let _ = tokio::fs::remove_file(&destination).await;
+            let _ = tokio::fs::remove_file(&staging).await;
             return Err(serialized_error(error.to_string(), "MODEL_DOWNLOAD_FAILED"));
         }
         hasher.consume(&chunk);
         current = current.saturating_add(chunk.len() as u64);
         if let Err(error) = emit_download_progress(window, response_channel, current, total, &destination, Value::Null) {
             drop(output);
-            let _ = tokio::fs::remove_file(&destination).await;
+            let _ = tokio::fs::remove_file(&staging).await;
             return Err(error);
         }
     }
     if let Err(error) = output.flush().await {
         drop(output);
-        let _ = tokio::fs::remove_file(&destination).await;
+        let _ = tokio::fs::remove_file(&staging).await;
         return Err(serialized_error(error.to_string(), "MODEL_DOWNLOAD_FAILED"));
     }
     drop(output);
     if total > 0 && current != total {
-        let _ = tokio::fs::remove_file(&destination).await;
+        let _ = tokio::fs::remove_file(&staging).await;
         return Err(serialized_error("Model download size did not match the server response", "MODEL_DOWNLOAD_TRUNCATED"));
     }
     if cancelled.load(Ordering::Relaxed) {
-        let _ = tokio::fs::remove_file(&destination).await;
+        let _ = tokio::fs::remove_file(&staging).await;
         return Err(serialized_error("Model download was cancelled", "REQUEST_CANCELLED"));
+    }
+    if let Err(error) = replace_staged_model_file(&staging, &destination, "MODEL_DOWNLOAD_FAILED").await {
+        let _ = tokio::fs::remove_file(&staging).await;
+        return Err(error);
     }
     let digest = format!("{:x}", hasher.compute());
     let downloaded = local_model(&destination, &filename, &digest, kind, model.clone(), version);
@@ -391,7 +396,6 @@ async fn copy_model_file(source: &str, destination: &Path, cancelled: &AtomicBoo
     ensure_safe_model_destination(destination).await?;
     let parent = destination.parent().unwrap_or(Path::new("."));
     let staging = parent.join(format!(".bsmanager-model-copy-{}", uuid::Uuid::new_v4()));
-    let backup = parent.join(format!(".bsmanager-model-backup-{}", uuid::Uuid::new_v4()));
     let result = async {
         let mut input = tokio::fs::File::open(source).await
             .map_err(|error| serialized_error(error.to_string(), "MODEL_COPY_FAILED"))?;
@@ -411,21 +415,38 @@ async fn copy_model_file(source: &str, destination: &Path, cancelled: &AtomicBoo
         output.flush().await
             .map_err(|error| serialized_error(error.to_string(), "MODEL_COPY_FAILED"))?;
         drop(output);
-        ensure_safe_model_destination(destination).await?;
-        let had_destination = tokio::fs::symlink_metadata(destination).await.is_ok();
-        if had_destination {
-            tokio::fs::rename(destination, &backup).await
-                .map_err(|error| serialized_error(error.to_string(), "MODEL_COPY_FAILED"))?;
+        if cancelled.load(Ordering::Relaxed) {
+            return Err(serialized_error("Model installation was cancelled", "REQUEST_CANCELLED"));
         }
-        if let Err(error) = tokio::fs::rename(&staging, destination).await {
-            if had_destination { let _ = tokio::fs::rename(&backup, destination).await; }
-            return Err(serialized_error(error.to_string(), "MODEL_COPY_FAILED"));
-        }
-        if had_destination { let _ = tokio::fs::remove_file(backup).await; }
+        replace_staged_model_file(&staging, destination, "MODEL_COPY_FAILED").await?;
         Ok(())
     }.await;
     if result.is_err() { let _ = tokio::fs::remove_file(staging).await; }
     result
+}
+
+async fn replace_staged_model_file(
+    staging: &Path,
+    destination: &Path,
+    error_code: &str,
+) -> Result<(), SerializedError> {
+    ensure_safe_model_destination(destination).await?;
+    let backup = destination.with_file_name(format!(".bsmanager-model-backup-{}", uuid::Uuid::new_v4()));
+    let had_destination = match tokio::fs::symlink_metadata(destination).await {
+        Ok(_) => true,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => return Err(serialized_error(error.to_string(), error_code)),
+    };
+    if had_destination {
+        tokio::fs::rename(destination, &backup).await
+            .map_err(|error| serialized_error(error.to_string(), error_code))?;
+    }
+    if let Err(error) = tokio::fs::rename(staging, destination).await {
+        if had_destination { let _ = tokio::fs::rename(&backup, destination).await; }
+        return Err(serialized_error(error.to_string(), error_code));
+    }
+    if had_destination { let _ = tokio::fs::remove_file(backup).await; }
+    Ok(())
 }
 
 fn emit_download_progress<R: Runtime>(
