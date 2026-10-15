@@ -481,6 +481,10 @@ async fn handle_request<R: Runtime>(
         "current-version" => Ok(json!(env!("CARGO_PKG_VERSION"))),
         "get-available-update" => Ok(Value::Null),
         "check-update" => Ok(json!(false)),
+        "download-update" | "install-update" => Err(serialized_error(
+            "Remote updates are disabled until a signed Tauri update endpoint is configured",
+            "UPDATES_DISABLED",
+        )),
         "get-supporters" => serde_json::from_str(SUPPORTERS)
             .map_err(|error| serialized_error(error.to_string(), "SUPPORTERS_READ_FAILED")),
         "bs-installer.folder-exists" => Ok(json!(install_directory(app).map_err(|error| serialized_error(error, "INSTALL_PATH_FAILED"))?.is_dir())),
@@ -697,6 +701,12 @@ async fn handle_request<R: Runtime>(
             Ok(Value::Null)
         }
         "window.progression" => Ok(Value::Null),
+        "restart-app" => {
+            if window.label() != "main" {
+                return Err(serialized_error("Restart is only available in the main window", "WINDOW_NOT_ALLOWED"));
+            }
+            Ok(Value::Null)
+        }
         "notify-system" => {
             let title = args.get("title").and_then(Value::as_str).unwrap_or("BSManager");
             let body = args.get("body").and_then(Value::as_str).unwrap_or("");
@@ -761,7 +771,9 @@ async fn ipc_send<R: Runtime>(app: AppHandle<R>, window: WebviewWindow<R>, chann
             log::warn!("Windows Tauri one-way route '{channel}' failed: {}", error.message);
         }
     } else {
-        ipc_response(&window, &channel, &request, result, matches!(channel.as_str(), "import-version" | "download-bs-version" | "auto-download-bs-version" | "download-bs-version-qr" | "bs-oculus-download" | "bs-launch.launch" | "download-model" | "get-version-models" | "export-models" | "delete-models" | "load-version-maps" | "delete-maps" | "export-maps" | "bs-maps.import-maps" | "get-version-playlists-details" | "import-playlists" | "delete-playlist" | "export-playlists" | "download-playlist" | "one-click-install-playlist" | "bs-mods.import-mods" | "bs-mods.install-mods" | "bs-mods.uninstall-mods" | "bs-mods.uninstall-all-mods" | "last-downloaded-map"));
+        let should_restart = channel == "restart-app" && result.is_ok();
+        ipc_response(&window, &channel, &request, result, matches!(channel.as_str(), "import-version" | "download-bs-version" | "auto-download-bs-version" | "download-bs-version-qr" | "bs-oculus-download" | "bs-launch.launch" | "download-model" | "get-version-models" | "export-models" | "delete-models" | "load-version-maps" | "delete-maps" | "export-maps" | "bs-maps.import-maps" | "get-version-playlists-details" | "import-playlists" | "delete-playlist" | "export-playlists" | "download-playlist" | "one-click-install-playlist" | "bs-mods.import-mods" | "bs-mods.install-mods" | "bs-mods.uninstall-mods" | "bs-mods.uninstall-all-mods" | "download-update" | "last-downloaded-map"));
+        if should_restart { app.request_restart(); }
     }
 }
 
