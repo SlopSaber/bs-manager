@@ -12,6 +12,7 @@ use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
 
 mod library;
+mod archive_io;
 mod launch;
 mod linker;
 mod liv;

@@ -221,7 +221,13 @@ fn extract_external_zip(source: &Path, destination: &Path, cancelled: &AtomicBoo
             let output = staging.join(&output_relative);
             fs::create_dir_all(output.parent().unwrap_or(&staging)).map_err(|error| serialized_error(error.to_string(), "MOD_IMPORT_FAILED"))?;
             let mut file = File::create(&output).map_err(|error| serialized_error(error.to_string(), "MOD_IMPORT_FAILED"))?;
-            io::copy(&mut entry, &mut file).map_err(|error| serialized_error(error.to_string(), "MOD_IMPORT_FAILED"))?;
+            crate::archive_io::copy_cancellable(&mut entry, &mut file, cancelled).map_err(|error| {
+                if cancelled.load(Ordering::Relaxed) {
+                    serialized_error("Mod import was cancelled", "REQUEST_CANCELLED")
+                } else {
+                    serialized_error(error.to_string(), "MOD_IMPORT_FAILED")
+                }
+            })?;
             added.push(output_relative);
         }
         if !added.iter().any(|path| path.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("dll"))) {

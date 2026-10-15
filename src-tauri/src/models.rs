@@ -84,7 +84,12 @@ pub async fn export_models<R: Runtime>(
     let archived = worker.await
         .map_err(|error| serialized_error(error.to_string(), "MODEL_EXPORT_FAILED"))?;
     if let Some(error) = progress_error { return Err(error); }
-    archived.map_err(|error| serialized_error(error, "MODEL_EXPORT_FAILED"))?;
+    if let Err(error) = archived {
+        if cancelled.load(Ordering::Relaxed) {
+            return Err(serialized_error("Model export was cancelled", "REQUEST_CANCELLED"));
+        }
+        return Err(serialized_error(error, "MODEL_EXPORT_FAILED"));
+    }
     Ok(Value::Null)
 }
 
@@ -133,7 +138,8 @@ fn write_model_archive(
             }
             archive.start_file(name, options).map_err(|error| error.to_string())?;
             let mut input = File::open(path).map_err(|error| error.to_string())?;
-            std::io::copy(&mut input, &mut archive).map_err(|error| error.to_string())?;
+            crate::archive_io::copy_cancellable(&mut input, &mut archive, &cancelled)
+                .map_err(|error| error.to_string())?;
             let _ = progress.send(index as u64 + 1);
         }
         archive.finish().map_err(|error| error.to_string())?;

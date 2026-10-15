@@ -197,7 +197,12 @@ pub async fn export_playlists<R: Runtime>(
     }
     let result = worker.await.map_err(|error| serialized_error(error.to_string(), "PLAYLIST_EXPORT_FAILED"))?;
     if let Some(error) = emit_error { return Err(error); }
-    result.map_err(|error| serialized_error(error, "PLAYLIST_EXPORT_FAILED"))?;
+    if let Err(error) = result {
+        if cancelled.load(Ordering::Relaxed) {
+            return Err(serialized_error("Playlist export was cancelled", "REQUEST_CANCELLED"));
+        }
+        return Err(serialized_error(error, "PLAYLIST_EXPORT_FAILED"));
+    }
     Ok(Value::Null)
 }
 
@@ -542,7 +547,8 @@ fn write_playlist_archive(
             if cancelled.load(Ordering::Relaxed) { return Err("Playlist export was cancelled".to_owned()); }
             archive.start_file(name, options).map_err(|error| error.to_string())?;
             let mut input = File::open(path).map_err(|error| error.to_string())?;
-            io::copy(&mut input, &mut archive).map_err(|error| error.to_string())?;
+            crate::archive_io::copy_cancellable(&mut input, &mut archive, &cancelled)
+                .map_err(|error| error.to_string())?;
             let _ = progress.send(index as u64 + 1);
         }
         archive.finish().map_err(|error| error.to_string())?;
