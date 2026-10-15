@@ -7,7 +7,8 @@ use std::{
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tauri::{AppHandle, Emitter, Manager, Runtime, WebviewWindow, path::BaseDirectory};
-use tokio::{process::Command, time::sleep};
+use tokio::{process::Command, time::{Instant as TokioInstant, sleep, timeout, timeout_at}};
+use chrono::{DateTime, Utc};
 
 use crate::{
     AppState, SerializedError, serialized_error, versions, windows_integration,
@@ -15,6 +16,21 @@ use crate::{
 
 const GAME_EXE: &str = "Beat Saber.exe";
 const STEAM_APP_ID: &str = "620980";
+const PROCESS_QUERY: &str = "[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false); $rows = @(Get-CimInstance Win32_Process -Filter \"Name = 'Beat Saber.exe'\" | ForEach-Object { [pscustomobject]@{ pid = $_.ProcessId; startedAt = $_.CreationDate.ToUniversalTime().ToString('o'); path = $_.ExecutablePath } }); ConvertTo-Json -InputObject $rows -Compress";
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GameProcess {
+    pid: u32,
+    started_at: String,
+    path: Option<String>,
+}
+
+struct GameProcessIdentity {
+    pid: u32,
+    started_at: String,
+    path: String,
+}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -100,15 +116,21 @@ async fn launch_inner<R: Runtime>(
             .map_err(|error| serialized_error(error.to_string(), "LOG_PATH_FAILED"))?;
         std::fs::create_dir_all(&log_directory)
             .map_err(|error| serialized_error(error.to_string(), "LOG_PATH_FAILED"))?;
-        let close_on_launch = should_close_manager_after_launch(app);
-        let existing_processes = if close_on_launch { process_ids(GAME_EXE).await } else { HashSet::new() };
+        let existing_processes = game_processes().await.ok().map(|processes| processes.into_iter().map(|process| process.pid).collect::<HashSet<_>>());
+        let launched_after = Utc::now();
         let mut helper_args = vec![game_executable.to_string_lossy().to_string()];
         helper_args.append(&mut launch_args);
         helper_args.push("--log-path".to_owned());
         helper_args.push(log_directory.join("bs-admin-start.log").to_string_lossy().to_string());
         windows_integration::run_as_admin(&helper, &helper_args)?;
-        if close_on_launch && wait_for_new_game_process(&existing_processes).await {
-            app.exit(0);
+        if let Some(existing_processes) = existing_processes {
+            if let Some(launched_game) = wait_for_new_game_process(&existing_processes, &game_executable, launched_after).await {
+                if should_close_manager_after_launch(app) {
+                    app.exit(0);
+                } else {
+                    wait_for_game_process_exit(&launched_game).await;
+                }
+            }
         }
         return Ok(Value::Null);
     }
@@ -127,10 +149,8 @@ async fn launch_inner<R: Runtime>(
     }
     let executable = parsed.remove(0);
     parsed.append(&mut launch_args);
-    let close_on_launch = should_close_manager_after_launch(app);
-    let existing_processes = if close_on_launch { process_ids(GAME_EXE).await } else { HashSet::new() };
-    let launches_game_directly = Path::new(&executable).file_name().and_then(|name| name.to_str())
-        .is_some_and(|name| name.eq_ignore_ascii_case(GAME_EXE));
+    let existing_processes = game_processes().await.ok().map(|processes| processes.into_iter().map(|process| process.pid).collect::<HashSet<_>>());
+    let launched_after = Utc::now();
     let mut process = Command::new(executable);
     process.args(parsed)
         .current_dir(&game_folder)
@@ -140,13 +160,19 @@ async fn launch_inner<R: Runtime>(
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
     process.creation_flags(0x08000000);
-    let mut child = process.spawn()
+    let child = process.spawn()
         .map_err(|error| serialized_error(error.to_string(), "EXIT"))?;
-    if close_on_launch {
-        if launches_game_directly || wait_for_new_game_process(&existing_processes).await {
-            app.exit(0);
+    if let Some(existing_processes) = existing_processes {
+        if let Some(launched_game) = wait_for_new_game_process(&existing_processes, &game_executable, launched_after).await {
+            if should_close_manager_after_launch(app) {
+                app.exit(0);
+            } else {
+                wait_for_game_process_exit(&launched_game).await;
+            }
+            return Ok(Value::Null);
         }
     }
+    let mut child = child;
     child.wait().await.map_err(|error| serialized_error(error.to_string(), "EXIT"))?;
     Ok(Value::Null)
 }
@@ -205,12 +231,73 @@ async fn process_ids(executable: &str) -> HashSet<u32> {
     }).unwrap_or_default()
 }
 
-async fn wait_for_new_game_process(existing: &HashSet<u32>) -> bool {
-    for _ in 0..120 {
-        if process_ids(GAME_EXE).await.iter().any(|pid| !existing.contains(pid)) { return true; }
-        sleep(Duration::from_millis(500)).await;
+async fn game_processes() -> Result<Vec<GameProcess>, String> {
+    let powershell = std::env::var_os("WINDIR")
+        .map(|windir| PathBuf::from(windir).join("System32\\WindowsPowerShell\\v1.0\\powershell.exe"))
+        .unwrap_or_else(|| PathBuf::from(r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"));
+    let mut command = Command::new(powershell);
+    command.args(["-NoProfile", "-NonInteractive", "-Command", PROCESS_QUERY])
+        .creation_flags(0x08000000)
+        .kill_on_drop(true);
+    let output = timeout(Duration::from_secs(10), command.output()).await
+        .map_err(|_| "Process enumeration timed out".to_owned())?
+        .map_err(|error| error.to_string())?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_owned());
     }
-    false
+    let value: Value = serde_json::from_slice(&output.stdout).map_err(|error| error.to_string())?;
+    let values = match value {
+        Value::Array(values) => values,
+        Value::Null => Vec::new(),
+        value => vec![value],
+    };
+    values.into_iter().map(|value| serde_json::from_value(value).map_err(|error| error.to_string())).collect()
+}
+
+async fn wait_for_new_game_process(existing: &HashSet<u32>, executable: &Path, launched_after: DateTime<Utc>) -> Option<GameProcessIdentity> {
+    let expected_path = normalize_process_path(&std::fs::canonicalize(executable).unwrap_or_else(|_| executable.to_path_buf()).to_string_lossy());
+    let deadline = TokioInstant::now() + Duration::from_secs(60);
+    while TokioInstant::now() < deadline {
+        match timeout_at(deadline, game_processes()).await {
+            Err(_) => return None,
+            Ok(Ok(processes)) => {
+                let candidates = processes.into_iter().filter_map(|process| {
+                    if existing.contains(&process.pid) { return None; }
+                    let path = process.path?;
+                    if normalize_process_path(&path) != expected_path { return None; }
+                    let started_at = DateTime::parse_from_rfc3339(&process.started_at).ok()?;
+                    if started_at.timestamp_millis() < launched_after.timestamp_millis() { return None; }
+                    Some(GameProcessIdentity { pid: process.pid, started_at: process.started_at, path })
+                }).collect::<Vec<_>>();
+                if candidates.len() == 1 { return candidates.into_iter().next(); }
+            }
+            Ok(Err(error)) => log::debug!("Could not inspect Beat Saber process ownership: {error}"),
+        }
+        if timeout_at(deadline, sleep(Duration::from_millis(500))).await.is_err() { return None; }
+    }
+    None
+}
+
+async fn wait_for_game_process_exit(identity: &GameProcessIdentity) {
+    loop {
+        match game_processes().await {
+            Ok(processes) => {
+                let still_running = processes.iter().any(|process| {
+                    process.pid == identity.pid
+                        && process.started_at == identity.started_at
+                        && process.path.as_deref().is_some_and(|path| normalize_process_path(path) == normalize_process_path(&identity.path))
+                });
+                if !still_running { return; }
+            }
+            Err(error) => log::debug!("Could not inspect Beat Saber process exit: {error}"),
+        }
+        sleep(Duration::from_secs(1)).await;
+    }
+}
+
+fn normalize_process_path(path: &str) -> String {
+    let normalized = path.trim_matches('"').replace('/', "\\").to_ascii_lowercase();
+    normalized.strip_prefix("\\\\?\\").unwrap_or(&normalized).to_owned()
 }
 
 fn build_game_arguments(version: &Value, launch_mods: &[String]) -> Vec<String> {
