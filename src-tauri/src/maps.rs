@@ -291,12 +291,16 @@ pub async fn import_maps<R: Runtime>(
             let staging = root.join(format!(".bsmanager-import-{}", uuid::Uuid::new_v4()));
             let archive_for_worker = archive_path.clone();
             let staging_for_worker = staging.clone();
+            let cancelled_for_worker = cancelled.clone();
             let folder_for_worker = folder.clone();
             let extracted = tokio::task::spawn_blocking(move || {
-                extract_map_archive_folder(&archive_for_worker, &staging_for_worker, &folder_for_worker)
+                extract_map_archive_folder(&archive_for_worker, &staging_for_worker, &folder_for_worker, &cancelled_for_worker)
             }).await.map_err(|error| serialized_error(error.to_string(), "MAP_IMPORT_FAILED"))?;
             if let Err(error) = extracted {
                 let _ = tokio::fs::remove_dir_all(&staging).await;
+                if cancelled.load(Ordering::Relaxed) {
+                    return Err(serialized_error("Map import was cancelled", "REQUEST_CANCELLED"));
+                }
                 return Err(serialized_error(error, "MAP_IMPORT_FAILED"));
             }
             if cancelled.load(Ordering::Relaxed) {
@@ -350,7 +354,7 @@ pub async fn download_map<R: Runtime>(
 ) -> Result<Value, SerializedError> {
     let map = args.get("map").ok_or_else(|| serialized_error("Map details are required", "INVALID_MAP"))?;
     let version = args.get("version").filter(|version| !version.is_null());
-    download_and_install_map(app, map, version, &cancelled).await
+    download_and_install_map(app, map, version, cancelled).await
 }
 
 pub async fn one_click_install_map<R: Runtime>(
@@ -361,7 +365,7 @@ pub async fn one_click_install_map<R: Runtime>(
     let mut installed = versions::get_installed_versions(app)?
         .as_array().cloned().unwrap_or_default();
     let target_version = installed.pop();
-    let downloaded = download_and_install_map(app, map, target_version.as_ref(), &cancelled).await?;
+    let downloaded = download_and_install_map(app, map, target_version.as_ref(), cancelled.clone()).await?;
     let source = downloaded.get("path").and_then(Value::as_str)
         .ok_or_else(|| serialized_error("Downloaded map path is missing", "MAP_DOWNLOAD_FAILED"))?;
     let source = PathBuf::from(source);
@@ -406,7 +410,7 @@ async fn download_and_install_map<R: Runtime>(
     app: &AppHandle<R>,
     map: &Value,
     version: Option<&Value>,
-    cancelled: &AtomicBool,
+    cancelled: Arc<AtomicBool>,
 ) -> Result<Value, SerializedError> {
     let first_version = map.pointer("/versions/0")
         .ok_or_else(|| serialized_error("Map has no downloadable version", "INVALID_MAP"))?;
@@ -449,12 +453,19 @@ async fn download_and_install_map<R: Runtime>(
     let archive_path = root.join(format!(".bsmanager-map-{id}.zip"));
     let backup = root.join(format!(".bsmanager-map-backup-{id}"));
     let result = async {
-        download_map_archive(&download_url, &archive_path, cancelled).await?;
+        download_map_archive(&download_url, &archive_path, &cancelled).await?;
         let archive_for_worker = archive_path.clone();
         let staging_for_worker = staging.clone();
-        tokio::task::spawn_blocking(move || extract_map_archive(&archive_for_worker, &staging_for_worker)).await
-            .map_err(|error| serialized_error(error.to_string(), "MAP_EXTRACT_FAILED"))?
-            .map_err(|error| serialized_error(error.to_string(), "MAP_EXTRACT_FAILED"))?;
+        let cancelled_for_worker = cancelled.clone();
+        let extracted = tokio::task::spawn_blocking(move || {
+            extract_map_archive(&archive_for_worker, &staging_for_worker, &cancelled_for_worker)
+        }).await.map_err(|error| serialized_error(error.to_string(), "MAP_EXTRACT_FAILED"))?;
+        if let Err(error) = extracted {
+            if cancelled.load(Ordering::Relaxed) {
+                return Err(serialized_error("Map download was cancelled", "REQUEST_CANCELLED"));
+            }
+            return Err(serialized_error(error, "MAP_EXTRACT_FAILED"));
+        }
         let staging_for_load = staging.clone();
         let extracted = tokio::task::spawn_blocking(move || load_map_info(&staging_for_load)).await
             .map_err(|error| serialized_error(error.to_string(), "MAP_LOAD_FAILED"))?
@@ -534,11 +545,12 @@ async fn download_map_archive(url: &Url, destination: &Path, cancelled: &AtomicB
     Ok(())
 }
 
-fn extract_map_archive(archive_path: &Path, destination: &Path) -> Result<(), String> {
+fn extract_map_archive(archive_path: &Path, destination: &Path, cancelled: &AtomicBool) -> Result<(), String> {
     fs::create_dir_all(destination).map_err(|error| error.to_string())?;
     let file = File::open(archive_path).map_err(|error| error.to_string())?;
     let mut archive = ZipArchive::new(file).map_err(|error| error.to_string())?;
     for index in 0..archive.len() {
+        if cancelled.load(Ordering::Relaxed) { return Err("Map extraction was cancelled".to_owned()); }
         let mut entry = archive.by_index(index).map_err(|error| error.to_string())?;
         if entry.is_symlink() {
             return Err("Map archive contains a symbolic link".to_owned());
@@ -550,7 +562,7 @@ fn extract_map_archive(archive_path: &Path, destination: &Path) -> Result<(), St
         } else {
             if let Some(parent) = output.parent() { fs::create_dir_all(parent).map_err(|error| error.to_string())?; }
             let mut file = File::create(output).map_err(|error| error.to_string())?;
-            io::copy(&mut entry, &mut file).map_err(|error| error.to_string())?;
+            copy_archive_entry(&mut entry, &mut file, cancelled)?;
         }
     }
     Ok(())
@@ -573,12 +585,13 @@ fn scan_map_archive(archive_path: &Path) -> io::Result<Vec<String>> {
     Ok(folders)
 }
 
-fn extract_map_archive_folder(archive_path: &Path, destination: &Path, folder: &str) -> Result<(), String> {
+fn extract_map_archive_folder(archive_path: &Path, destination: &Path, folder: &str, cancelled: &AtomicBool) -> Result<(), String> {
     fs::create_dir_all(destination).map_err(|error| error.to_string())?;
     let file = File::open(archive_path).map_err(|error| error.to_string())?;
     let mut archive = ZipArchive::new(file).map_err(|error| error.to_string())?;
     let prefix = if folder == "." { String::new() } else { format!("{}/", folder.trim_end_matches('/')) };
     for index in 0..archive.len() {
+        if cancelled.load(Ordering::Relaxed) { return Err("Map extraction was cancelled".to_owned()); }
         let mut entry = archive.by_index(index).map_err(|error| error.to_string())?;
         let Some(enclosed) = entry.enclosed_name() else { return Err("Map archive contains an unsafe path".to_owned()); };
         if entry.is_symlink() { return Err("Map archive contains a symbolic link".to_owned()); }
@@ -597,10 +610,20 @@ fn extract_map_archive_folder(archive_path: &Path, destination: &Path, folder: &
         } else {
             if let Some(parent) = output.parent() { fs::create_dir_all(parent).map_err(|error| error.to_string())?; }
             let mut file = File::create(output).map_err(|error| error.to_string())?;
-            io::copy(&mut entry, &mut file).map_err(|error| error.to_string())?;
+            copy_archive_entry(&mut entry, &mut file, cancelled)?;
         }
     }
     Ok(())
+}
+
+fn copy_archive_entry<R: Read, W: io::Write>(reader: &mut R, writer: &mut W, cancelled: &AtomicBool) -> Result<(), String> {
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        if cancelled.load(Ordering::Relaxed) { return Err("Map extraction was cancelled".to_owned()); }
+        let read = reader.read(&mut buffer).map_err(|error| error.to_string())?;
+        if read == 0 { return Ok(()); }
+        writer.write_all(&buffer[..read]).map_err(|error| error.to_string())?;
+    }
 }
 
 fn safe_archive_relative(path: &str) -> Result<PathBuf, String> {
