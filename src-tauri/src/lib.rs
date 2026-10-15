@@ -590,7 +590,7 @@ async fn handle_request<R: Runtime>(
 ) -> Result<Value, SerializedError> {
     let mutates_library = matches!(channel,
         "import-version" | "download-bs-version" | "auto-download-bs-version" | "download-bs-version-qr" |
-        "bs-oculus-download" | "bs-version.clone" | "bs.uninstall" |
+        "bs-oculus-download" | "bs-version.edit" | "bs-version.clone" | "bs.uninstall" |
         "delete-maps" | "bs-maps.import-maps" | "bs-maps.download-map" | "one-click-install-map" |
         "install-playlist-file" | "import-playlists" | "delete-playlist" | "download-playlist" | "one-click-install-playlist" |
         "bs-mods.import-mods" | "bs-mods.install-mods" | "bs-mods.uninstall-mods" | "bs-mods.uninstall-all-mods" |
@@ -605,6 +605,30 @@ async fn handle_request<R: Runtime>(
             ));
         }
     }
+    let _operation_locks = if mutates_library {
+        let mut roots = vec![install_directory(app)
+            .map_err(|error| serialized_error(error, "INSTALL_PATH_FAILED"))?];
+        if channel == "bs-installer.set-install-path" {
+            let path = args.get("path").and_then(Value::as_str)
+                .filter(|path| !path.trim().is_empty())
+                .ok_or_else(|| serialized_error("Install path is required", "INVALID_INSTALL_PATH"))?;
+            let selected = library::canonicalize_existing_directory(Path::new(path.trim()))
+                .map_err(|error| serialized_error(error, "INVALID_FOLDER"))?;
+            roots.push(normalize_install_parent(selected).join(INSTALL_FOLDER));
+        }
+        let lock_cancelled = cancelled.clone();
+        let locks = tokio::task::spawn_blocking(move || {
+            library::acquire_operation_locks(&roots, lock_cancelled)
+        }).await.map_err(|error| serialized_error(error.to_string(), "LIBRARY_LOCK_FAILED"))?
+            .map_err(|error| if error.kind() == std::io::ErrorKind::Interrupted {
+                serialized_error("Library operation was cancelled while waiting for another instance", "REQUEST_CANCELLED")
+            } else {
+                serialized_error(error.to_string(), "LIBRARY_LOCK_FAILED")
+            })?;
+        Some(locks)
+    } else {
+        None
+    };
 
     match channel {
         "import-version" => {

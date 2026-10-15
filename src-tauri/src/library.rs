@@ -1,5 +1,138 @@
 use std::{fs, io, path::{Component, Path, PathBuf}};
 
+pub struct OperationLocks {
+    #[cfg(windows)]
+    release: Option<std::sync::mpsc::Sender<()>>,
+}
+
+#[cfg(windows)]
+pub fn acquire_operation_locks(
+    roots: &[PathBuf],
+    cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> io::Result<OperationLocks> {
+    let mut names = roots.iter().map(|root| operation_mutex_name(root)).collect::<io::Result<Vec<_>>>()?;
+    names.sort();
+    names.dedup();
+
+    let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel::<io::Result<()>>(1);
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    std::thread::Builder::new()
+        .name("bsmanager-library-lock".to_owned())
+        .spawn(move || {
+            use std::sync::atomic::Ordering;
+            use windows_sys::Win32::{
+                Foundation::{CloseHandle, WAIT_ABANDONED, WAIT_OBJECT_0, WAIT_TIMEOUT},
+                System::Threading::{CreateMutexW, ReleaseMutex, WaitForSingleObject},
+            };
+
+            let mut handles = Vec::with_capacity(names.len());
+            let acquisition = (|| -> io::Result<()> {
+                for name in names {
+                    let wide_name = name.encode_utf16().chain(Some(0)).collect::<Vec<_>>();
+                    let handle = unsafe { CreateMutexW(std::ptr::null(), 0, wide_name.as_ptr()) };
+                    if handle.is_null() {
+                        return Err(io::Error::last_os_error());
+                    }
+
+                    loop {
+                        if cancelled.load(Ordering::Relaxed) {
+                            unsafe { CloseHandle(handle); }
+                            return Err(io::Error::new(io::ErrorKind::Interrupted, "Library operation was cancelled while waiting for another instance"));
+                        }
+
+                        let result = unsafe { WaitForSingleObject(handle, 200) };
+                        if result == WAIT_OBJECT_0 || result == WAIT_ABANDONED {
+                            handles.push(handle);
+                            break;
+                        }
+                        if result == WAIT_TIMEOUT {
+                            continue;
+                        }
+
+                        let error = io::Error::last_os_error();
+                        unsafe { CloseHandle(handle); }
+                        return Err(error);
+                    }
+                }
+                if cancelled.load(Ordering::Relaxed) {
+                    return Err(io::Error::new(io::ErrorKind::Interrupted, "Library operation was cancelled while waiting for another instance"));
+                }
+                Ok(())
+            })();
+
+            match acquisition {
+                Ok(()) => {
+                    if ready_tx.send(Ok(())).is_ok() {
+                        let _ = release_rx.recv();
+                    }
+                }
+                Err(error) => { let _ = ready_tx.send(Err(error)); }
+            }
+
+            for handle in handles.into_iter().rev() {
+                unsafe {
+                    ReleaseMutex(handle);
+                    CloseHandle(handle);
+                }
+            }
+        })?;
+
+    match ready_rx.recv() {
+        Ok(Ok(())) => Ok(OperationLocks { release: Some(release_tx) }),
+        Ok(Err(error)) => Err(error),
+        Err(error) => Err(io::Error::new(io::ErrorKind::Other, error.to_string())),
+    }
+}
+
+#[cfg(not(windows))]
+pub fn acquire_operation_locks(
+    _roots: &[PathBuf],
+    _cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> io::Result<OperationLocks> {
+    Ok(OperationLocks {})
+}
+
+impl Drop for OperationLocks {
+    fn drop(&mut self) {
+        #[cfg(windows)]
+        if let Some(release) = self.release.take() {
+            let _ = release.send(());
+        }
+    }
+}
+
+#[cfg(windows)]
+fn operation_mutex_name(root: &Path) -> io::Result<String> {
+    use sha2::{Digest, Sha256};
+
+    let identity = normalize_lock_path(root)?.to_string_lossy().to_lowercase();
+    let digest = Sha256::digest(identity.as_bytes());
+    let hash = digest.iter().map(|byte| format!("{byte:02x}")).collect::<String>();
+    Ok(format!("Local\\BSManagerLibrary-{hash}"))
+}
+
+#[cfg(windows)]
+fn normalize_lock_path(path: &Path) -> io::Result<PathBuf> {
+    let absolute = if path.is_absolute() { path.to_path_buf() } else { std::env::current_dir()?.join(path) };
+    if let Ok(path) = fs::canonicalize(&absolute) {
+        return Ok(path);
+    }
+
+    let mut missing = Vec::new();
+    let mut existing = absolute.as_path();
+    while !existing.exists() {
+        let name = existing.file_name().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Library path cannot be normalized"))?;
+        missing.push(name.to_os_string());
+        existing = existing.parent().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Library path has no existing parent"))?;
+    }
+
+    let mut normalized = fs::canonicalize(existing)?;
+    for component in missing.iter().rev() {
+        normalized.push(component);
+    }
+    Ok(normalized)
+}
+
 #[derive(Debug)]
 pub enum LibraryError {
     CopyToSubpath,
