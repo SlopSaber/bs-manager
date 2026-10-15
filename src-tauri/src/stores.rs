@@ -35,7 +35,7 @@ pub fn oculus_game_folder() -> Option<PathBuf> {
     })
 }
 
-fn steam_install_path() -> Option<PathBuf> {
+pub fn steam_install_path() -> Option<PathBuf> {
     let machine = RegKey::predef(HKEY_LOCAL_MACHINE);
     [r"SOFTWARE\Valve\Steam", r"SOFTWARE\WOW6432Node\Valve\Steam"]
         .into_iter()

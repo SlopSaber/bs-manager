@@ -9,8 +9,11 @@ use std::{
 use serde_json::{Value, json};
 use tauri::{AppHandle, Manager, Runtime, path::BaseDirectory};
 use tokio::time::sleep;
-use winreg::{RegKey, enums::{HKEY_LOCAL_MACHINE, KEY_READ}};
+use winreg::{RegKey, enums::{HKEY_CLASSES_ROOT, HKEY_LOCAL_MACHINE, KEY_READ}};
 use windows_sys::Win32::{
+    Foundation::{CloseHandle, HANDLE},
+    Security::{GetTokenInformation, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation},
+    System::Threading::{GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION},
     UI::{Shell::ShellExecuteW, WindowsAndMessaging::SW_SHOWNORMAL},
 };
 
@@ -21,6 +24,81 @@ const OPENXR_REGISTRY_KEY: &str = r"SOFTWARE\Khronos\OpenXR\1";
 
 pub fn sideloaded_apps_enabled() -> Result<Value, SerializedError> {
     Ok(json!(read_sideload_setting()?))
+}
+
+pub async fn need_start_as_admin() -> Value {
+    if process_token_elevated(unsafe { GetCurrentProcess() }).unwrap_or(false) {
+        return json!(false);
+    }
+    let Some(pid) = process_id_by_name("steam.exe").await else { return json!(false) };
+    let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if process.is_null() { return json!(false); }
+    let elevated = process_token_elevated(process).unwrap_or(false);
+    unsafe { CloseHandle(process); }
+    json!(elevated)
+}
+
+pub fn open_external_uri(uri: &str) -> Result<(), SerializedError> {
+    let operation = "open".encode_utf16().chain(Some(0)).collect::<Vec<_>>();
+    let target = uri.encode_utf16().chain(Some(0)).collect::<Vec<_>>();
+    let empty = [0_u16];
+    let result = unsafe {
+        ShellExecuteW(null_mut(), operation.as_ptr(), target.as_ptr(), empty.as_ptr(), empty.as_ptr(), SW_SHOWNORMAL)
+    };
+    check_shell_execute_result(result, "EXTERNAL_URI_FAILED")
+}
+
+pub fn run_as_admin(helper: &Path, arguments: &[String]) -> Result<(), SerializedError> {
+    let operation = "runas".encode_utf16().chain(Some(0)).collect::<Vec<_>>();
+    let executable = helper.to_string_lossy().encode_utf16().chain(Some(0)).collect::<Vec<_>>();
+    let parameters = arguments.iter().map(|argument| quote_windows_argument(argument)).collect::<Vec<_>>().join(" ");
+    let parameters = parameters.encode_utf16().chain(Some(0)).collect::<Vec<_>>();
+    let directory = helper.parent().unwrap_or(Path::new(".")).to_string_lossy()
+        .encode_utf16().chain(Some(0)).collect::<Vec<_>>();
+    let result = unsafe {
+        ShellExecuteW(null_mut(), operation.as_ptr(), executable.as_ptr(), parameters.as_ptr(), directory.as_ptr(), SW_SHOWNORMAL)
+    };
+    check_shell_execute_result(result, "LAUNCH_ELEVATION_FAILED")
+}
+
+pub fn oculus_is_installed() -> bool {
+    let classes = RegKey::predef(HKEY_CLASSES_ROOT);
+    let Ok(protocol) = classes.open_subkey_with_flags("oculus", KEY_READ) else { return false };
+    if protocol.get_value::<String, _>("URL Protocol").is_err() { return false; }
+    classes.open_subkey_with_flags("oculus\\shell\\open\\command", KEY_READ)
+        .ok().and_then(|command| command.get_value::<String, _>("").ok())
+        .is_some_and(|command| !command.trim().is_empty())
+}
+
+fn check_shell_execute_result(result: windows_sys::Win32::Foundation::HINSTANCE, code: &str) -> Result<(), SerializedError> {
+    if (result as isize) <= 32 {
+        return Err(serialized_error(format!("Windows could not start the requested program ({})", result as isize), code));
+    }
+    Ok(())
+}
+
+fn quote_windows_argument(argument: &str) -> String {
+    if !argument.is_empty() && !argument.chars().any(|character| character.is_whitespace() || character == '"') {
+        return argument.to_owned();
+    }
+    let mut quoted = String::from("\"");
+    let mut backslashes = 0;
+    for character in argument.chars() {
+        if character == '\\' {
+            backslashes += 1;
+        } else if character == '"' {
+            quoted.push_str(&"\\".repeat(backslashes * 2 + 1));
+            quoted.push('"');
+            backslashes = 0;
+        } else {
+            quoted.push_str(&"\\".repeat(backslashes));
+            quoted.push(character);
+            backslashes = 0;
+        }
+    }
+    quoted.push_str(&"\\".repeat(backslashes * 2));
+    quoted.push('"');
+    quoted
 }
 
 pub async fn enable_sideloaded_apps<R: Runtime>(app: &AppHandle<R>) -> Result<Value, SerializedError> {
@@ -80,7 +158,7 @@ pub async fn enable_sideloaded_apps<R: Runtime>(app: &AppHandle<R>) -> Result<Va
 }
 
 pub fn active_vr_runtime(command: Option<&str>) -> Value {
-    let overrides = parse_leading_environment(command.unwrap_or_default());
+    let (overrides, _) = parse_leading_environment(command.unwrap_or_default());
     if let Some(runtime_path) = environment_value(&overrides, "XR_RUNTIME_JSON").filter(|path| !path.is_empty()) {
         return json!(runtime_from_path(&expand_environment(&runtime_path, &overrides)));
     }
@@ -105,18 +183,56 @@ fn read_sideload_setting() -> Result<bool, SerializedError> {
     Ok(key.get_value::<u32, _>("AllowDevSideloaded").unwrap_or_default() == 1)
 }
 
-fn parse_leading_environment(command: &str) -> Vec<(String, String)> {
+fn process_token_elevated(process: HANDLE) -> Option<bool> {
+    let mut token: HANDLE = std::ptr::null_mut();
+    if unsafe { OpenProcessToken(process, TOKEN_QUERY, &mut token) } == 0 { return None; }
+    let mut elevation = TOKEN_ELEVATION::default();
+    let mut returned = 0_u32;
+    let result = unsafe {
+        GetTokenInformation(
+            token,
+            TokenElevation,
+            &mut elevation as *mut TOKEN_ELEVATION as *mut std::ffi::c_void,
+            std::mem::size_of::<TOKEN_ELEVATION>() as u32,
+            &mut returned,
+        )
+    };
+    unsafe { CloseHandle(token); }
+    (result != 0).then_some(elevation.TokenIsElevated != 0)
+}
+
+async fn process_id_by_name(executable: &str) -> Option<u32> {
+    let output = tokio::process::Command::new("tasklist")
+        .args(["/FI", &format!("IMAGENAME eq {executable}"), "/FO", "CSV", "/NH"])
+        .creation_flags(0x08000000)
+        .output().await.ok()?;
+    let output = String::from_utf8_lossy(&output.stdout);
+    output.lines().find_map(|line| {
+        let mut columns = line.split(',');
+        let name = columns.next()?.trim().trim_matches('"');
+        if !name.eq_ignore_ascii_case(executable) { return None; }
+        columns.next()?.trim().trim_matches('"').parse::<u32>().ok()
+    })
+}
+
+pub fn parse_leading_environment(command: &str) -> (Vec<(String, String)>, String) {
     let characters = command.chars().collect::<Vec<_>>();
     let mut position = 0;
+    let mut command_start = characters.len();
     let mut values = Vec::new();
     while position < characters.len() {
         while position < characters.len() && characters[position].is_whitespace() { position += 1; }
         if position >= characters.len() { break; }
         let start = position;
+        if !(characters[position].is_ascii_alphabetic() || characters[position] == '_') {
+            command_start = start;
+            break;
+        }
         while position < characters.len() && (characters[position].is_ascii_alphanumeric() || characters[position] == '_') {
             position += 1;
         }
         if start == position || position >= characters.len() || characters[position] != '=' {
+            command_start = start;
             break;
         }
         let name = characters[start..position].iter().collect::<String>();
@@ -126,10 +242,10 @@ fn parse_leading_environment(command: &str) -> Vec<(String, String)> {
             position += 1;
             let start = position;
             while position < characters.len() && characters[position] != quote { position += 1; }
-            if position >= characters.len() { break; }
+            if position >= characters.len() { command_start = start; break; }
             let value = characters[start..position].iter().collect::<String>();
             position += 1;
-            if position < characters.len() && !characters[position].is_whitespace() { break; }
+            if position < characters.len() && !characters[position].is_whitespace() { command_start = start; break; }
             value
         } else {
             let start = position;
@@ -138,7 +254,8 @@ fn parse_leading_environment(command: &str) -> Vec<(String, String)> {
         };
         values.push((name, value));
     }
-    values
+    let remainder = characters[command_start..].iter().collect::<String>().trim().to_owned();
+    (values, remainder)
 }
 
 fn environment_value(overrides: &[(String, String)], name: &str) -> Option<String> {

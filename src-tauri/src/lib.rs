@@ -10,9 +10,11 @@ use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
 
 mod library;
+mod launch;
 mod linker;
 mod meta;
 mod oculus;
+mod shortcuts;
 mod stores;
 mod steam;
 mod versions;
@@ -30,6 +32,7 @@ struct AppState {
     library_operation: tokio::sync::Mutex<()>,
     meta_login: tokio::sync::Mutex<()>,
     oculus_download: Mutex<Option<oculus::OculusControl>>,
+    launch_in_progress: AtomicBool,
     active_requests: Mutex<HashMap<String, Arc<AtomicBool>>>,
     steam_download: Mutex<Option<steam::SteamControl>>,
 }
@@ -386,6 +389,14 @@ async fn handle_request<R: Runtime>(
             oculus::download(app, window, response_channel, &args, cancelled).await
         }
         "bs-oculus-stop-download" => Ok(oculus::stop_download(app)),
+        "bs-launch.launch" => {
+            if !matches!(window.label(), "main" | "shortcut-launch") {
+                return Err(serialized_error("Launch is unavailable in this window", "WINDOW_NOT_ALLOWED"));
+            }
+            launch::launch(app, window, response_channel, &args).await
+        }
+        "bs-launch.need-start-as-admin" => Ok(windows_integration::need_start_as_admin().await),
+        "create-launch-shortcut" => Ok(json!(shortcuts::create_launch_shortcut(app, &args).await)),
         "is-oculus-sideloaded-apps-enabled" => windows_integration::sideloaded_apps_enabled(),
         "enable-oculus-sideloaded-apps" => windows_integration::enable_sideloaded_apps(app).await,
         "vr-runtime.get-active" => Ok(windows_integration::active_vr_runtime(args.as_str())),
@@ -673,7 +684,7 @@ async fn ipc_send<R: Runtime>(app: AppHandle<R>, window: WebviewWindow<R>, chann
             log::warn!("Windows Tauri one-way route '{channel}' failed: {}", error.message);
         }
     } else {
-        ipc_response(&window, &channel, &request, result, matches!(channel.as_str(), "import-version" | "download-bs-version" | "auto-download-bs-version" | "download-bs-version-qr" | "bs-oculus-download"));
+        ipc_response(&window, &channel, &request, result, matches!(channel.as_str(), "import-version" | "download-bs-version" | "auto-download-bs-version" | "download-bs-version-qr" | "bs-oculus-download" | "bs-launch.launch"));
     }
 }
 
