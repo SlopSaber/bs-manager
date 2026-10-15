@@ -21,6 +21,9 @@ node_modules
 release/app/dist
 release/app/.erb
 release/build
+release/tauri
+src-tauri/target
+src-tauri/gen/schemas
 
 .idea
 npm-debug.log.*

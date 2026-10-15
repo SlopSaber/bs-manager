@@ -169,7 +169,7 @@ export function LaunchSlide({ version }: Props) {
     const launchModItems = useMemo<LaunchModItemProps[]>(() => {
 
         let protonLogsPath: string[] = [];
-        if (window.electron.platform === "linux") {
+        if (window.desktop.platform === "linux") {
             protonLogsPath = version.steam
                 ? [version.path, "Logs"]
                 : ["BSInstances", version.name, "Logs"];
@@ -224,11 +224,11 @@ export function LaunchSlide({ version }: Props) {
                 id: LaunchMods.PROTON_LOGS,
                 label: t("pages.version-viewer.launch-mods.proton-logs"),
                 description: t("pages.version-viewer.launch-mods.proton-logs-description", {
-                    versionPath: `${window.electron.path.join(...protonLogsPath)}/`
+                    versionPath: `${window.desktop.path.join(...protonLogsPath)}/`
                 }),
                 active: activeLaunchMods.includes(LaunchMods.PROTON_LOGS),
                 pinned: pinnedLaunchMods.includes(LaunchMods.PROTON_LOGS),
-                visible: window.electron.platform === "linux",
+                visible: window.desktop.platform === "linux",
                 onChange: (checked) => toggleActiveLaunchMod(checked, LaunchMods.PROTON_LOGS),
                 onPinChange: (pinned) => togglePinnedLaunchMod(pinned, LaunchMods.PROTON_LOGS),
             },
@@ -238,7 +238,7 @@ export function LaunchSlide({ version }: Props) {
                 description: t("pages.version-viewer.launch-mods.parallel-views-description"),
                 active: activeLaunchMods.includes(LaunchMods.PARALLEL_VIEWS),
                 pinned: pinnedLaunchMods.includes(LaunchMods.PARALLEL_VIEWS),
-                visible: window.electron.platform === "linux",
+                visible: window.desktop.platform === "linux",
                 onChange: (checked) => toggleActiveLaunchMod(checked, LaunchMods.PARALLEL_VIEWS),
                 onPinChange: (pinned) => togglePinnedLaunchMod(pinned, LaunchMods.PARALLEL_VIEWS),
             },

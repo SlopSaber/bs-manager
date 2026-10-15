@@ -28,8 +28,8 @@ export const defaultConfiguration: {
     supported_languages: ["en-US", "en-EN", "fr-FR", "es-ES", "it-IT", "de-DE", "ru-RU", "zh-CN", "zh-TW", "ja-JP", "ko-KR", "pt-BR", "uk-UA", "tl-PH"],
     default_mods: ["SongCore", "WhyIsThereNoLeaderboard", "BeatSaverDownloader", "BeatSaverVoting", "PlaylistManager"],
     "default-shared-folders": [
-        window.electron.path.join("Beat Saber_Data", "CustomLevels"),
-        window.electron.path.join("Beat Saber_Data", "CustomWIPLevels"),
+        window.desktop.path.join("Beat Saber_Data", "CustomLevels"),
+        window.desktop.path.join("Beat Saber_Data", "CustomWIPLevels"),
     ],
     "playlist-sort-order": BsvSearchOrder.Relevance,
     "map-sort-order": BsvSearchOrder.Relevance,

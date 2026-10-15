@@ -75,7 +75,7 @@ function AutoUpdateButton({ latestVersion }: Readonly<{
     const ipcService = useService(IpcService);
     const { text: t } = useTranslationV2();
 
-    const isLinux = window.electron.platform === "linux";
+    const isLinux = window.desktop.platform === "linux";
 
     const updateAndRestart = async () => {
         await configService.set("auto-update", AutoUpdate.ONCE);
@@ -168,7 +168,7 @@ export default function TitleBar({ template = "index.html" }: { template: AppWin
     if (template === "index.html") {
         return (
             <header id="titlebar" className="min-h-[22px] w-screen h-[22px] flex content-center items-center justify-start z-10 shrink-0">
-                <div id="drag-region" className="grow basis-0 h-full">
+                <div id="drag-region" data-tauri-drag-region className="grow basis-0 h-full">
                     <div id="window-title" className="pl-1">
                         <span className="text-gray-800 dark:text-gray-100 font-bold text-xs italic">BSManager</span>
                         <TitleBarTags version={currentVersion} latestVersion={latestVersion} />
@@ -211,14 +211,14 @@ export default function TitleBar({ template = "index.html" }: { template: AppWin
     if (template === "launcher.html") {
         return (
             <header id="titlebar" className="min-h-[22px] bg-transparent w-screen h-[22px] z-10">
-                <div id="drag-region" className="grow basis-0 h-full" />
+                <div id="drag-region" data-tauri-drag-region className="grow basis-0 h-full" />
             </header>
         );
     }
 
     return (
         <header id="titlebar" className="min-h-[22px] bg-transparent w-screen h-[22px] flex content-center items-center justify-start z-10">
-            <div id="drag-region" className="grow h-full">
+            <div id="drag-region" data-tauri-drag-region className="grow h-full">
                 <div id="window-title" className="pl-1">
                     <span className="text-gray-100 font-bold text-xs italic">BSManager</span>
                 </div>

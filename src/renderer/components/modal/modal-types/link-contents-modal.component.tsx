@@ -26,17 +26,17 @@ export const LinkContentModal: ModalComponent<void, {version: BSVersion, content
     const sharedPath = useObservable(() => versionLinker.getSharedFolder().pipe(map(sharedPath => {
         switch(contentType){
             case "maps":
-                return window.electron.path.join(sharedPath, "SharedMaps", "CustomLevels");
+                return window.desktop.path.join(sharedPath, "SharedMaps", "CustomLevels");
             case "playlists":
-                return window.electron.path.join(sharedPath, PlaylistsManagerService.RELATIVE_PLAYLISTS_FOLDER);
+                return window.desktop.path.join(sharedPath, PlaylistsManagerService.RELATIVE_PLAYLISTS_FOLDER);
             case "avatars":
-                return window.electron.path.join(sharedPath, MODEL_TYPE_FOLDERS.avatar);
+                return window.desktop.path.join(sharedPath, MODEL_TYPE_FOLDERS.avatar);
             case "sabers":
-                return window.electron.path.join(sharedPath, MODEL_TYPE_FOLDERS.saber);
+                return window.desktop.path.join(sharedPath, MODEL_TYPE_FOLDERS.saber);
             case "platforms":
-                return window.electron.path.join(sharedPath, MODEL_TYPE_FOLDERS.platform);
+                return window.desktop.path.join(sharedPath, MODEL_TYPE_FOLDERS.platform);
             case "bloqs":
-                return window.electron.path.join(sharedPath, MODEL_TYPE_FOLDERS.bloq);
+                return window.desktop.path.join(sharedPath, MODEL_TYPE_FOLDERS.bloq);
             default:
                 return "";
         }
@@ -45,17 +45,17 @@ export const LinkContentModal: ModalComponent<void, {version: BSVersion, content
     const contentsPath = useConstant(() => {
         switch(contentType){
             case "maps":
-                return window.electron.path.join(version.path, MapsManagerService.RELATIVE_MAPS_FOLDER);
+                return window.desktop.path.join(version.path, MapsManagerService.RELATIVE_MAPS_FOLDER);
             case "playlists":
-                return window.electron.path.join(version.path, PlaylistsManagerService.RELATIVE_PLAYLISTS_FOLDER);
+                return window.desktop.path.join(version.path, PlaylistsManagerService.RELATIVE_PLAYLISTS_FOLDER);
             case "avatars":
-                return window.electron.path.join(version.path, MODEL_TYPE_FOLDERS.avatar);
+                return window.desktop.path.join(version.path, MODEL_TYPE_FOLDERS.avatar);
             case "sabers":
-                return window.electron.path.join(version.path, MODEL_TYPE_FOLDERS.saber);
+                return window.desktop.path.join(version.path, MODEL_TYPE_FOLDERS.saber);
             case "platforms":
-                return window.electron.path.join(version.path, MODEL_TYPE_FOLDERS.platform);
+                return window.desktop.path.join(version.path, MODEL_TYPE_FOLDERS.platform);
             case "bloqs":
-                return window.electron.path.join(version.path, MODEL_TYPE_FOLDERS.bloq);
+                return window.desktop.path.join(version.path, MODEL_TYPE_FOLDERS.bloq);
             default:
                 return "";
         }

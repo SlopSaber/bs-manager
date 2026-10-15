@@ -237,7 +237,7 @@ export class BsModsManagerService {
 
     public async getModsGridStatus(): Promise<ModsGridStatus> {
 
-        if(window.electron.platform === "linux"){
+        if(window.desktop.platform === "linux"){
             const winePrefix = await lastValueFrom(this.linux.getWinePrefixPath());
             if(!winePrefix){
                 logRenderError("Could not find BSManager WINEPREFIX path");

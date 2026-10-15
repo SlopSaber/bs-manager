@@ -14,7 +14,7 @@ type Props = {
 export function SettingContainer({ id, className, title, minorTitle, description, children, os }: Props) {
     const t = useTranslationV2();
 
-    if (os && os !== window.electron.platform) {
+    if (os && os !== window.desktop.platform) {
         return undefined;
     }
 

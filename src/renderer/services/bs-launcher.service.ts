@@ -87,7 +87,7 @@ export class BSLauncherService {
     }
 
     private async enableSideloadedAppsIfNeeded(): Promise<void> {
-        if(window.electron.platform !== "win32"){ return; }
+        if(window.desktop.platform !== "win32"){ return; }
         const isSideloadedAppsEnabled = await lastValueFrom(this.ipcService.sendV2("is-oculus-sideloaded-apps-enabled"));
         if(isSideloadedAppsEnabled){ return; }
 
@@ -105,7 +105,7 @@ export class BSLauncherService {
             .some(launchMod => launchOptions.launchMods?.includes(launchMod));
         const predatesOpenXr = safeLt(launchOptions.version.BSVersion, "1.29.4");
 
-        if (window.electron.platform !== "win32" || bypassesOpenXr || predatesOpenXr || this.config.get(VR_RUNTIME_WARNING_DISMISS_KEY)) {
+        if (window.desktop.platform !== "win32" || bypassesOpenXr || predatesOpenXr || this.config.get(VR_RUNTIME_WARNING_DISMISS_KEY)) {
             return true;
         }
 

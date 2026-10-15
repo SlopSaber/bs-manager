@@ -81,7 +81,7 @@ export const CreateLaunchShortcutModal: ModalComponent<{ steamShortcut: boolean,
                         <span className="font-bold cursor-help">{t("pages.version-viewer.launch-mods.debug")}</span>
                     </Tippy>
                 </div>
-                {window.electron.platform === "linux" && (
+                {window.desktop.platform === "linux" && (
                     <div className="h-full flex justify-center items-center gap-2">
                         <BsmCheckbox className="h-5 aspect-square relative z-[1]" checked={launchOption.launchMods.includes(LaunchMods.PARALLEL_VIEWS)} onChange={e => toogleLaunchMod(LaunchMods.PARALLEL_VIEWS, e)} />
                         <Tippy className="!bg-main-color-1" content={t("pages.version-viewer.launch-mods.parallel-views-description")} delay={[300, 0]} arrow={false}>

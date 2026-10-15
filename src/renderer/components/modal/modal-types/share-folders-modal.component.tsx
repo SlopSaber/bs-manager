@@ -205,7 +205,7 @@ const FolderItem = ({ version, relativeFolder, onDelete }: FolderProps) => {
 
     const color = useThemeColor("first-color");
     const state = useObservable(() => linker.$folderLinkedState(version, relativeFolder), FolderLinkState.Unlinked, [version, relativeFolder]);
-    const name = relativeFolder.split(window.electron.path.sep).at(-1);
+    const name = relativeFolder.split(window.desktop.path.sep).at(-1);
 
     const onClickLink = () => {
         if (state === FolderLinkState.Linked) {

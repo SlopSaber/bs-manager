@@ -639,12 +639,12 @@ function AdvancedSettings() {
     useEffect(() => {
         staticConfig.get("disable-hadware-acceleration").then(disabled =>setHardwareAccelerationEnabled(() => disabled !== true));
 
-        if (window.electron.platform === "win32") {
+        if (window.desktop.platform === "win32") {
             staticConfig.get("use-symlinks").then(useSymlinks => setUseSymlink(() => useSymlinks));
             staticConfig.get("use-system-proxy").then(useSystemProxy => setUseSystemProxy(() => useSystemProxy));
             staticConfig.get("auto-update").then(res => setAutoUpdate(() => res ?? AutoUpdate.ALWAYS));
         }
-        if (isCloseOnLaunchSupported(window.electron.platform)) {
+        if (isCloseOnLaunchSupported(window.desktop.platform)) {
             staticConfig.get("close-bs-manager-on-launch").then(closeOnLaunch => setCloseBsManagerOnLaunch(closeOnLaunch ?? false));
         }
     }, []);
@@ -683,7 +683,7 @@ function AdvancedSettings() {
 
     const onChangeUseSymlinks = async (newUseSymlink: boolean) => {
 
-        if (window.electron.platform !== "win32" || newUseSymlink === useSymlink) {
+        if (window.desktop.platform !== "win32" || newUseSymlink === useSymlink) {
             return;
         }
 
@@ -713,7 +713,7 @@ function AdvancedSettings() {
 
     const onChangeUseSystemProxy = async (newUseSystemProxy: boolean) => {
 
-        if (window.electron.platform !== "win32" || newUseSystemProxy === useSystemProxy) {
+        if (window.desktop.platform !== "win32" || newUseSystemProxy === useSystemProxy) {
             return;
         }
 
@@ -728,7 +728,7 @@ function AdvancedSettings() {
     }
 
     const onChangeAutoUpdate = async (value: boolean) => {
-        if (window.electron.platform !== "win32") {
+        if (window.desktop.platform !== "win32") {
             return;
         }
 
@@ -747,7 +747,7 @@ function AdvancedSettings() {
     }
 
     const onChangeCloseBsManagerOnLaunch = async (value: boolean) => {
-        if (!isCloseOnLaunchSupported(window.electron.platform) || value === closeBsManagerOnLaunch) {
+        if (!isCloseOnLaunchSupported(window.desktop.platform) || value === closeBsManagerOnLaunch) {
             return;
         }
 
@@ -766,7 +766,7 @@ function AdvancedSettings() {
 
     const advancedItems: Item[] = [];
 
-    if (window.electron.platform === "win32") {
+    if (window.desktop.platform === "win32") {
         advancedItems.push({
             checked: autoUpdate === AutoUpdate.ALWAYS,
             text: t.text("pages.settings.advanced.auto-update.title"),
@@ -774,7 +774,7 @@ function AdvancedSettings() {
             onChange: onChangeAutoUpdate
         });
     }
-    if (isCloseOnLaunchSupported(window.electron.platform)) {
+    if (isCloseOnLaunchSupported(window.desktop.platform)) {
         advancedItems.push({
             checked: closeBsManagerOnLaunch,
             text: t.text("pages.settings.advanced.close-bs-manager-on-launch.title"),
@@ -790,7 +790,7 @@ function AdvancedSettings() {
         onChange: onChangeHardwareAcceleration
     });
 
-    if (window.electron.platform === "win32") {
+    if (window.desktop.platform === "win32") {
         advancedItems.push({
             checked: useSymlink,
             text: t.text("pages.settings.advanced.use-symlinks.title"),

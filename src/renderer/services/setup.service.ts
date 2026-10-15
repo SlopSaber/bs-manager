@@ -37,7 +37,7 @@ export class SetupService {
             // NOTE: for modal sequencing
             await this.checkInstallationPath();
 
-            if (window.electron.platform === "linux") {
+            if (window.desktop.platform === "linux") {
                 await this.checkProtonFolder();
             }
         } catch (error) {

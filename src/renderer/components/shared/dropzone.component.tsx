@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from "framer-motion";
-import { DragEvent, ReactNode, useCallback, useMemo, useState } from "react";
+import { DragEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BsmImage } from "./bsm-image.component";
 import BeatImpatient from "../../../../assets/images/apngs/beat-impatient.png";
 import { useThemeColor } from "renderer/hooks/use-theme-color.hook";
@@ -12,6 +12,7 @@ import { useService } from "renderer/hooks/use-service.hook";
 import { IpcService } from "renderer/services/ipc.service";
 import { NotificationService } from "renderer/services/notification.service";
 import { lastValueFrom } from "rxjs";
+import type { DragDropEvent } from "@tauri-apps/api/webview";
 
 type Props = Readonly<{
     children?: ReactNode;
@@ -48,6 +49,7 @@ export function Dropzone({
 
     const [dragCount, setDragCount] = useState(0);
     const [dropZoneDragging, setDropZoneDragging] = useState(false);
+    const dropTarget = useRef<HTMLDivElement>(null);
     const themeColor = useThemeColor("first-color");
     const color = new Color(themeColor).lighten(.25).saturate(.8).hex();
 
@@ -71,7 +73,7 @@ export function Dropzone({
         }
 
         const paths = Array.from(event.dataTransfer.files).reduce<string[]>((acc, file) => {
-            const path = window.electron.webUtils.getPathForFile(file);
+            const path = window.desktop.webUtils.getPathForFile(file);
 
             if(supportedExtensions.some(ext => path.endsWith(ext))) {
                 acc.push(path);
@@ -90,7 +92,66 @@ export function Dropzone({
         }
 
         onFiles(paths);
-    }, [supportedExtensions]);
+    }, [supportedExtensions, onFiles, notification, t]);
+
+    const handleNativeDrop = useCallback((paths: string[]) => {
+        setDragCount(0);
+        setDropZoneDragging(false);
+
+        if (!onFiles) return;
+
+        const acceptedPaths = paths.filter(path => supportedExtensions.some(extension => {
+            const suffix = extension.startsWith(".") ? extension : `.${extension}`;
+            return path.toLocaleLowerCase().endsWith(suffix.toLocaleLowerCase());
+        }));
+
+        if (!acceptedPaths.length) {
+            notification.notifyError({
+                title: t("notifications.shared.errors.titles.file-not-supported"),
+                desc: t("notifications.shared.errors.msg.file-not-supported", { types: supportedExtensions.join(", ") }),
+                duration: 8000,
+            });
+            return;
+        }
+
+        onFiles(acceptedPaths);
+    }, [notification, onFiles, supportedExtensions, t]);
+
+    useEffect(() => {
+        const onNativeDrop = (event: Event) => {
+            const payload = (event as CustomEvent<DragDropEvent>).detail;
+            if (payload.type === "leave") {
+                setDragCount(0);
+                setDropZoneDragging(false);
+                return;
+            }
+
+            if (payload.type === "enter" || payload.type === "over") {
+                setDragCount(1);
+                const bounds = dropTarget.current?.getBoundingClientRect();
+                const scale = window.devicePixelRatio || 1;
+                const x = payload.position.x / scale;
+                const y = payload.position.y / scale;
+                setDropZoneDragging(!!bounds && x >= bounds.left && x <= bounds.right && y >= bounds.top && y <= bounds.bottom);
+            }
+
+            if (payload.type !== "drop") return;
+
+            const bounds = dropTarget.current?.getBoundingClientRect();
+            const scale = window.devicePixelRatio || 1;
+            const x = payload.position.x / scale;
+            const y = payload.position.y / scale;
+            if (bounds && x >= bounds.left && x <= bounds.right && y >= bounds.top && y <= bounds.bottom) {
+                handleNativeDrop(payload.paths);
+            } else {
+                setDragCount(0);
+                setDropZoneDragging(false);
+            }
+        };
+
+        window.addEventListener("desktop-files-dropped", onNativeDrop);
+        return () => window.removeEventListener("desktop-files-dropped", onNativeDrop);
+    }, [handleNativeDrop]);
 
     const onDragOver = useCallback((event: DragEvent<HTMLDivElement>) => {
         event.preventDefault();
@@ -137,6 +198,7 @@ export function Dropzone({
                                 </button>
                             )}
                             <div
+                                ref={dropTarget}
                                 onDragOver={onDragOver}
                                 onDrop={handleDrop}
                                 onDragEnter={() => setDropZoneDragging(true)}

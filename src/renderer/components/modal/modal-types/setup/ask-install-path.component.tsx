@@ -23,7 +23,7 @@ export const AskInstallPathModal: ModalComponent<{ installPath: string }, {}> = 
             .then(defaultPath => {
                 setInstallPath(defaultPath);
                 setDefaultInstallPath(defaultPath);
-                setInstallFolder(window.electron.path.basename(defaultPath));
+                setInstallFolder(window.desktop.path.basename(defaultPath));
             });
     }, []);
 
@@ -35,9 +35,9 @@ export const AskInstallPathModal: ModalComponent<{ installPath: string }, {}> = 
 
         const path = response.filePaths[0];
         setInstallPath(
-            window.electron.path.basename(path) === installFolder ?
+            window.desktop.path.basename(path) === installFolder ?
                 path :
-                window.electron.path.join(response.filePaths[0], installFolder)
+                window.desktop.path.join(response.filePaths[0], installFolder)
         );
     }
 

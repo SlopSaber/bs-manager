@@ -18,7 +18,7 @@ export class IpcService {
     private constructor() {}
 
     public sendLazy<T = unknown>(channel: string, request?: IpcRequest<T>): void {
-        window.electron.ipcRenderer.sendMessage(channel, request);
+        window.desktop.ipcRenderer.sendMessage(channel, request);
     }
 
     public sendV2<C extends IpcChannels>(channel: C, data?: IpcRequestType<C>, defaultValue?: IpcResponseType<C>): Observable<IpcResponseType<C>> {
@@ -33,17 +33,17 @@ export class IpcService {
         const teardownChannel: IpcTearDownChannel = `${request.responceChannel}_teardown`;
 
         const obs = new Observable<IpcResponseType<C>>(observer => {
-            window.electron.ipcRenderer.on(request.responceChannel, (res: IpcResponseType<C>) => observer.next(res));
-            window.electron.ipcRenderer.on(errorChannel, (err) => observer.error(deserializeError(err)));
-            window.electron.ipcRenderer.on(completeChannel, () => observer.complete());
+            window.desktop.ipcRenderer.on(request.responceChannel, (res: IpcResponseType<C>) => observer.next(res));
+            window.desktop.ipcRenderer.on(errorChannel, (err) => observer.error(deserializeError(err)));
+            window.desktop.ipcRenderer.on(completeChannel, () => observer.complete());
 
-            window.electron.ipcRenderer.sendMessage(channel as string, request);
+            window.desktop.ipcRenderer.sendMessage(channel as string, request);
 
             return () => {
-                window.electron.ipcRenderer.removeAllListeners(request.responceChannel);
-                window.electron.ipcRenderer.removeAllListeners(errorChannel);
-                window.electron.ipcRenderer.removeAllListeners(completeChannel);
-                window.electron.ipcRenderer.sendMessage(teardownChannel, null);
+                window.desktop.ipcRenderer.removeAllListeners(request.responceChannel);
+                window.desktop.ipcRenderer.removeAllListeners(errorChannel);
+                window.desktop.ipcRenderer.removeAllListeners(completeChannel);
+                window.desktop.ipcRenderer.sendMessage(teardownChannel, null);
             };
         }).pipe(defaultValue ? defaultIfEmpty(defaultValue) : identity, share({connector: () => new ReplaySubject(1)}));
 

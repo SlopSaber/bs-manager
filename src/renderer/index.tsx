@@ -1,5 +1,6 @@
 import { createRoot } from "react-dom/client";
 import { HashRouter } from "react-router-dom";
+import "./desktop-bridge";
 import "tailwindcss/tailwind.css";
 import "./index.css";
 import { IpcService } from "./services/ipc.service";
