@@ -10,7 +10,7 @@ use std::{
 use futures_util::StreamExt;
 use serde_json::{Value, json};
 use tauri::{AppHandle, Manager, Runtime, WebviewWindow};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use url::Url;
 use zip::{CompressionMethod, write::{SimpleFileOptions, ZipWriter}};
 
@@ -270,8 +270,7 @@ pub async fn one_click_install_model<R: Runtime>(
         let destination = model_folder(app, model_type(model)?, Some(installed_version))?.join(filename);
         tokio::fs::create_dir_all(destination.parent().unwrap_or(Path::new("."))).await
             .map_err(|error| serialized_error(error.to_string(), "MODEL_PATH_FAILED"))?;
-        tokio::fs::copy(source, &destination).await
-            .map_err(|error| serialized_error(error.to_string(), "MODEL_COPY_FAILED"))?;
+        copy_model_file(source, &destination, &cancelled).await?;
     }
     Ok(Value::Null)
 }
@@ -298,6 +297,7 @@ async fn download_model_file<R: Runtime>(
     let destination = model_folder(app, kind, version)?.join(&filename);
     tokio::fs::create_dir_all(destination.parent().unwrap_or(Path::new("."))).await
         .map_err(|error| serialized_error(error.to_string(), "MODEL_PATH_FAILED"))?;
+    ensure_safe_model_destination(&destination).await?;
     if cancelled.load(Ordering::Relaxed) {
         return Err(serialized_error("Model download was cancelled", "REQUEST_CANCELLED"));
     }
@@ -374,6 +374,58 @@ async fn download_model_file<R: Runtime>(
     let downloaded = local_model(&destination, &filename, &digest, kind, model.clone(), version);
     emit_download_progress(window, response_channel, current, total.max(current), &destination, downloaded.clone())?;
     Ok(downloaded)
+}
+
+async fn ensure_safe_model_destination(destination: &Path) -> Result<(), SerializedError> {
+    match tokio::fs::symlink_metadata(destination).await {
+        Ok(metadata) if metadata.file_type().is_symlink() || metadata.is_dir() => {
+            Err(serialized_error("Model destination cannot be a symbolic link or folder", "INVALID_PATH"))
+        }
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(serialized_error(error.to_string(), "MODEL_PATH_FAILED")),
+    }
+}
+
+async fn copy_model_file(source: &str, destination: &Path, cancelled: &AtomicBool) -> Result<(), SerializedError> {
+    ensure_safe_model_destination(destination).await?;
+    let parent = destination.parent().unwrap_or(Path::new("."));
+    let staging = parent.join(format!(".bsmanager-model-copy-{}", uuid::Uuid::new_v4()));
+    let backup = parent.join(format!(".bsmanager-model-backup-{}", uuid::Uuid::new_v4()));
+    let result = async {
+        let mut input = tokio::fs::File::open(source).await
+            .map_err(|error| serialized_error(error.to_string(), "MODEL_COPY_FAILED"))?;
+        let mut output = tokio::fs::OpenOptions::new().write(true).create_new(true).open(&staging).await
+            .map_err(|error| serialized_error(error.to_string(), "MODEL_COPY_FAILED"))?;
+        let mut buffer = [0_u8; 64 * 1024];
+        loop {
+            if cancelled.load(Ordering::Relaxed) {
+                return Err(serialized_error("Model installation was cancelled", "REQUEST_CANCELLED"));
+            }
+            let read = input.read(&mut buffer).await
+                .map_err(|error| serialized_error(error.to_string(), "MODEL_COPY_FAILED"))?;
+            if read == 0 { break; }
+            output.write_all(&buffer[..read]).await
+                .map_err(|error| serialized_error(error.to_string(), "MODEL_COPY_FAILED"))?;
+        }
+        output.flush().await
+            .map_err(|error| serialized_error(error.to_string(), "MODEL_COPY_FAILED"))?;
+        drop(output);
+        ensure_safe_model_destination(destination).await?;
+        let had_destination = tokio::fs::symlink_metadata(destination).await.is_ok();
+        if had_destination {
+            tokio::fs::rename(destination, &backup).await
+                .map_err(|error| serialized_error(error.to_string(), "MODEL_COPY_FAILED"))?;
+        }
+        if let Err(error) = tokio::fs::rename(&staging, destination).await {
+            if had_destination { let _ = tokio::fs::rename(&backup, destination).await; }
+            return Err(serialized_error(error.to_string(), "MODEL_COPY_FAILED"));
+        }
+        if had_destination { let _ = tokio::fs::remove_file(backup).await; }
+        Ok(())
+    }.await;
+    if result.is_err() { let _ = tokio::fs::remove_file(staging).await; }
+    result
 }
 
 fn emit_download_progress<R: Runtime>(
