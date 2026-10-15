@@ -25,6 +25,7 @@ mod maps;
 mod playlists;
 mod mods;
 mod protocols;
+mod map_info_cache;
 mod song_cache;
 
 const VERSION_LIBRARY: &str = include_str!("../../assets/jsons/bs-versions.json");
@@ -1051,6 +1052,7 @@ pub fn run() {
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .invoke_handler(tauri::generate_handler![ipc_send, register_protocol])
         .setup(|app| {
+            map_info_cache::initialize(app.handle());
             let cache_app = app.handle().clone();
             tauri::async_runtime::spawn(async move { song_cache::initialize(&cache_app).await; });
             for argument in std::env::args_os().skip(1).filter_map(|argument| argument.into_string().ok()) {

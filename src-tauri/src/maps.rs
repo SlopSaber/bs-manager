@@ -101,6 +101,9 @@ pub async fn delete_maps<R: Runtime>(
             }
             fs::remove_dir_all(&canonical)
                 .map_err(|error| serialized_error(error.to_string(), "MAP_DELETE_FAILED"))?;
+            if let Some(dirname) = canonical.file_name().and_then(|name| name.to_str()) {
+                crate::map_info_cache::remove(dirname);
+            }
             deleted += 1;
         }
         emit_delete_progress(window, response_channel, total, deleted)?;
@@ -175,6 +178,9 @@ pub async fn delete_maps_by_hashes<R: Runtime>(
                 let canonical = validate_managed_map_path(app, &folder)?;
                 tokio::fs::remove_dir_all(canonical).await
                     .map_err(|error| serialized_error(error.to_string(), "MAP_DELETE_FAILED"))?;
+                if let Some(dirname) = folder.file_name().and_then(|name| name.to_str()) {
+                    crate::map_info_cache::remove(dirname);
+                }
                 current = current.saturating_add(1);
             }
         }
@@ -773,14 +779,25 @@ fn managed_map_roots<R: Runtime>(app: &AppHandle<R>) -> Result<Vec<PathBuf>, Ser
 }
 
 fn load_map_info(path: &Path) -> Result<Option<Value>, String> {
-    let entries = fs::read_dir(path).map_err(|error| error.to_string())?;
-    let info_path = entries.filter_map(Result::ok).map(|entry| entry.path())
-        .find(|entry| entry.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.eq_ignore_ascii_case("info.dat")));
-    let Some(info_path) = info_path else { return Ok(None); };
-    let raw_text = fs::read_to_string(&info_path).map_err(|error| error.to_string())?;
-    let raw: Value = serde_json::from_str(&raw_text).map_err(|error| error.to_string())?;
-    let map_info = parse_map_info(&raw)?;
-    let hash = compute_map_hash(path, &raw_text, &map_info)?;
+    let dirname = path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
+    let cacheable = !dirname.starts_with(".bsmanager-");
+    let cached = cacheable.then(|| crate::map_info_cache::get(dirname)).flatten();
+    let (map_info, hash) = if let Some(cached) = cached {
+        (cached.map_info, cached.hash)
+    } else {
+        let entries = fs::read_dir(path).map_err(|error| error.to_string())?;
+        let info_path = entries.filter_map(Result::ok).map(|entry| entry.path())
+            .find(|entry| entry.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.eq_ignore_ascii_case("info.dat")));
+        let Some(info_path) = info_path else { return Ok(None); };
+        let raw_text = fs::read_to_string(&info_path).map_err(|error| error.to_string())?;
+        let raw: Value = serde_json::from_str(&raw_text).map_err(|error| error.to_string())?;
+        let map_info = parse_map_info(&raw)?;
+        let hash = compute_map_hash(path, &raw_text, &map_info)?;
+        if cacheable {
+            crate::map_info_cache::remember(dirname, map_info.clone(), &hash);
+        }
+        (map_info, hash)
+    };
     let metadata = load_or_create_metadata(path)?;
     let song_filename = map_info.get("songFilename").and_then(Value::as_str)
         .ok_or_else(|| "Map song filename is missing".to_owned())?;
