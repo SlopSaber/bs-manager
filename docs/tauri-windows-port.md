@@ -15,8 +15,8 @@ Each command type-checks the Tauri renderer contracts, builds all six HTML entry
 
 Current local installers compile successfully and are unsigned:
 
-- Preview: `release/tauri/preview/BSManager-Preview-1.6.0-x64-setup.exe`, SHA-256 `6c698a3722be58643739dc0e51a3a06fd69a19f91b90ffc1fb393867a1c30034`.
-- Replacement: `release/tauri/replacement/BSManager-1.6.0-x64-setup.exe`, SHA-256 `0547b8362ce4db41ce70d6dcb3be2ab3e8c6f28a7f5db09b9419588821a62b16`.
+- Preview: `release/tauri/preview/BSManager-Preview-1.6.0-x64-setup.exe`, SHA-256 `bf38c9c5d42ee6d50e3469f679dc9095c03cd03ad445be67f96c01c0428b6b78`.
+- Replacement: `release/tauri/replacement/BSManager-1.6.0-x64-setup.exe`, SHA-256 `ca35fecd8ca2aa664bed975a250d72c7845baa72f4b497c93c31e1a5a41cb703`.
 
 ## Implemented in the Rust host
 
@@ -25,7 +25,8 @@ Current local installers compile successfully and are unsigned:
 - Steam sidecar download routes, Meta login/session routes, Meta downloads, game launch, Windows VR runtime and sideload controls, and supporter data.
 - ModelSaber search and lookup; model download, one-click installation, local listing, export, and deletion.
 - BeatSaver map and playlist search/details; local map listing, deletion, import/export, download, and one-click install. Map installs stage archive extraction, compute the Beat Saber hash, validate it against BeatSaver, then move the map into the managed folder.
-- Playlist listing, file import, install, delete, archive export, download, and one-click install. Download progress keeps the renderer’s existing payload shape. Local playlist statistics and cached song detail enrichment remain incomplete.
+- BeatSaver detail caching for maps fetched during the current session and the `get-maps-info-from-cache` route. Playlist details use cached song metadata for duration, mapper count, NPS, and song details when available; the bulk scraped cache is not yet loaded or persisted.
+- Playlist listing, file import, install, delete, archive export, download, and one-click install. Download progress keeps the renderer’s existing payload shape.
 - BeatMods availability and health routes; installed-mod discovery, DLL/ZIP import, download and content-hash validation, installation, removal, and remove-all. Archive member paths reject traversal and symbolic links. IPA execution and network cancellation still need runtime review.
 - Static configuration commands preserve unrecognized fields during file round trips. Request streaming and cancellation are bound to the originating window.
 
@@ -33,7 +34,7 @@ These routes compile. Their runtime behavior has not yet passed the user-led acc
 
 ## Remaining parity work
 
-- Complete route coverage is outstanding. Map-details cache reads, update download/install, uninstall, several OS-control operations, deep-link delivery for every scheme, and some configuration or library routes still need implementation or parity review. See the route names in `src/shared/models/ipc/ipc-routes.ts` and `src/main/ipcs` as the source inventory.
+- Complete route coverage is outstanding. Bulk map-cache loading and persistence, update download/install, uninstall, several OS-control operations, deep-link delivery for every scheme, and some configuration or library routes still need implementation or parity review. See the route names in `src/shared/models/ipc/ipc-routes.ts` and `src/main/ipcs` as the source inventory.
 - Verify six-window behavior and window-specific capabilities. The shared renderer entry pages exist, but the auxiliary window lifecycle and remote authentication/webview isolation need acceptance review.
 - Finish preview settings and library import behavior, replacement backup and legacy uninstallation, installer failure recovery, protocol ownership restoration, and rollback instructions. Replacement is not ready to replace an installed Electron build.
 - Complete Meta and Steam credential migration, download resume/error paths, map and playlist cache parity, mod dependency and IPA behavior, content sharing, archive interruption recovery, relocation, shortcuts, LIV integration, proxy behavior, process tracking, and update signing configuration.

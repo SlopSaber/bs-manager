@@ -406,6 +406,7 @@ async fn handle_request<R: Runtime>(
         "search-models" => models::search_models(&args).await,
         "bsv-search-map" | "bsv-get-map-details-from-hashs" | "bsv-get-map-details-by-id" |
         "bsv-search-playlist" | "bsv-get-playlist-details-by-id" => beat_saver::dispatch(channel, &args).await,
+        "get-maps-info-from-cache" => beat_saver::get_map_details_from_cache(&args),
         "load-version-maps" => maps::load_version_maps(app, window, response_channel, &args, cancelled).await,
         "delete-maps" => {
             let app_state = app.state::<AppState>();

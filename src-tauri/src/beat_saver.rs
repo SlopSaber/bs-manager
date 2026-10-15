@@ -21,6 +21,28 @@ pub async fn dispatch(channel: &str, args: &Value) -> Result<Value, SerializedEr
     }
 }
 
+pub fn get_map_details_from_cache(args: &Value) -> Result<Value, SerializedError> {
+    let hashes = args.as_array().ok_or_else(|| serialized_error("Map hashes must be an array", "INVALID_HASHES"))?;
+    let cache = MAP_CACHE.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
+    let cache = cache.lock().map_err(|_| serialized_error("BeatSaver cache is unavailable", "CACHE_FAILED"))?;
+    let details = hashes.iter().filter_map(Value::as_str)
+        .filter_map(|hash| cache.get(&hash.to_ascii_lowercase()))
+        .map(map_to_song_details).collect::<Vec<_>>();
+    Ok(json!(details))
+}
+
+pub fn song_details_from_cache(hash: &str) -> Option<Value> {
+    let cache = MAP_CACHE.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
+    let map = cache.lock().ok()?.get(&hash.to_ascii_lowercase())?.clone();
+    Some(map_to_song_details(&map))
+}
+
+pub fn song_details_by_id_from_cache(id: &str) -> Option<Value> {
+    let cache = MAP_CACHE.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
+    let map = cache.lock().ok()?.values().find(|map| map.get("id").and_then(Value::as_str) == Some(id))?.clone();
+    Some(map_to_song_details(&map))
+}
+
 async fn search_maps(args: &Value) -> Value {
     let query = args.get("q").and_then(Value::as_str).unwrap_or_default().trim();
     if let Some(id) = parse_bsr_code(query) {
@@ -50,7 +72,9 @@ async fn search_maps(args: &Value) -> Value {
                     }
                 }
             } else {
-                response.get("docs").cloned().unwrap_or_else(|| json!([]))
+                let maps = response.get("docs").cloned().unwrap_or_else(|| json!([]));
+                remember_maps(&maps);
+                maps
             }
         }
         Err(error) => {
@@ -134,7 +158,9 @@ async fn get_map_details_from_hashes(args: &Value) -> Result<Value, SerializedEr
         }
         result.extend(maps);
     }
-    Ok(json!(result))
+    let result = json!(result);
+    remember_maps(&result);
+    Ok(result)
 }
 
 async fn get_map_details_by_id(args: &Value) -> Result<Value, SerializedError> {
@@ -144,7 +170,76 @@ async fn get_map_details_by_id(args: &Value) -> Result<Value, SerializedError> {
 
 async fn map_by_id(id: &str) -> Result<Value, SerializedError> {
     let url = api_url(&["maps", "id", id])?;
-    get_json(url).await
+    let map = get_json(url).await?;
+    remember_maps(&map);
+    Ok(map)
+}
+
+fn remember_maps(value: &Value) {
+    let maps = if let Some(array) = value.as_array() {
+        array.iter().collect::<Vec<_>>()
+    } else if value.get("id").is_some() {
+        vec![value]
+    } else {
+        Vec::new()
+    };
+    let cache = MAP_CACHE.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
+    if let Ok(mut cache) = cache.lock() {
+        for map in maps {
+            let Some(hash) = map.pointer("/versions/0/hash").and_then(Value::as_str) else { continue; };
+            cache.insert(hash.to_ascii_lowercase(), map.clone());
+        }
+    }
+}
+
+fn map_to_song_details(map: &Value) -> Value {
+    let version = map.pointer("/versions/0");
+    let uploader = map.get("uploader").unwrap_or(&Value::Null);
+    let stats = map.get("stats").unwrap_or(&Value::Null);
+    let instant = |path: &str| map.pointer(path).and_then(|value| value.get("epochSeconds")).cloned().unwrap_or(Value::Null);
+    let difficulties = version.and_then(|version| version.get("diffs")).and_then(Value::as_array)
+        .into_iter().flatten().map(|difficulty| {
+            json!({
+                "difficulty": difficulty.get("difficulty").cloned().unwrap_or(Value::Null),
+                "characteristic": difficulty.get("characteristic").cloned().unwrap_or(Value::Null),
+                "label": difficulty.get("difficulty").cloned().unwrap_or(Value::Null),
+                "stars": difficulty.get("stars").cloned().unwrap_or(json!(0)),
+                "starsBL": difficulty.get("starsBL").cloned().unwrap_or(json!(0)),
+                "njs": difficulty.get("njs").cloned().unwrap_or(json!(0)),
+                "nps": difficulty.get("nps").cloned().unwrap_or(json!(0)),
+                "offset": difficulty.get("offset").cloned().unwrap_or(json!(0)),
+                "chroma": difficulty.get("chroma").cloned().unwrap_or(json!(false)),
+                "cinema": difficulty.get("cinema").cloned().unwrap_or(json!(false)),
+                "me": difficulty.get("me").cloned().unwrap_or(json!(false)),
+                "ne": difficulty.get("ne").cloned().unwrap_or(json!(false)),
+                "bombs": difficulty.get("bombs").cloned().unwrap_or(json!(0)),
+                "notes": difficulty.get("notes").cloned().unwrap_or(json!(0)),
+                "obstacles": difficulty.get("obstacles").cloned().unwrap_or(json!(0)),
+            })
+        }).collect::<Vec<_>>();
+    json!({
+        "id": map.get("id").cloned().unwrap_or(Value::Null),
+        "hash": version.and_then(|version| version.get("hash")).cloned().unwrap_or(Value::Null),
+        "name": map.get("name").cloned().unwrap_or(Value::Null),
+        "duration": map.pointer("/metadata/duration").cloned().unwrap_or(json!(0)),
+        "uploader": {
+            "name": uploader.get("name").cloned().unwrap_or(Value::Null),
+            "id": uploader.get("id").cloned().unwrap_or(json!(0)),
+            "verified": uploader.get("verifiedMapper").cloned().unwrap_or(json!(false)),
+        },
+        "uploadedAt": instant("/uploaded"),
+        "tags": map.get("tags").cloned().unwrap_or_else(|| json!([])),
+        "ranked": map.get("ranked").cloned().unwrap_or(json!(false)),
+        "qualified": map.get("qualified").cloned().unwrap_or(json!(false)),
+        "curated": !map.get("curatedAt").is_none_or(Value::is_null),
+        "blRanked": map.get("blRanked").cloned().unwrap_or(json!(false)),
+        "blQualified": map.get("blQualified").cloned().unwrap_or(json!(false)),
+        "upVotes": stats.get("upvotes").cloned().unwrap_or(json!(0)),
+        "downVotes": stats.get("downvotes").cloned().unwrap_or(json!(0)),
+        "downloads": stats.get("downloads").cloned().unwrap_or(json!(0)),
+        "automapper": map.get("automapper").cloned().unwrap_or(json!(false)),
+        "difficulties": difficulties,
+    })
 }
 
 async fn search_playlists(args: &Value) -> Result<Value, SerializedError> {

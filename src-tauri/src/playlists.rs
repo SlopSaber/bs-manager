@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     fs::{self, File},
     io,
     path::{Path, PathBuf},
@@ -448,7 +449,32 @@ fn write_playlist(path: &Path, playlist: &Value, overwrite: bool) -> Result<(), 
 }
 
 fn local_playlist_details(playlist: Value, path: &Path) -> Value {
-    let songs = playlist.get("songs").and_then(Value::as_array).cloned().unwrap_or_default();
+    let mut songs = playlist.get("songs").and_then(Value::as_array).cloned().unwrap_or_default();
+    let mut mappers = HashSet::new();
+    let mut duration = 0.0_f64;
+    let mut min_nps = f64::INFINITY;
+    let mut max_nps = f64::NEG_INFINITY;
+    for song in &mut songs {
+        let details = song.get("hash").and_then(Value::as_str).and_then(find_hash)
+            .and_then(|hash| crate::beat_saver::song_details_from_cache(&hash))
+            .or_else(|| song.get("levelid").and_then(Value::as_str).and_then(find_hash)
+                .and_then(|hash| crate::beat_saver::song_details_from_cache(&hash)))
+            .or_else(|| song.get("key").and_then(Value::as_str)
+                .and_then(crate::beat_saver::song_details_by_id_from_cache));
+        let Some(details) = details else { continue; };
+        duration += details.get("duration").and_then(Value::as_f64).unwrap_or_default();
+        if let Some(id) = details.pointer("/uploader/id").filter(|id| !id.is_null()) {
+            mappers.insert(id.to_string());
+        }
+        for nps in details.get("difficulties").and_then(Value::as_array).into_iter().flatten()
+            .filter_map(|difficulty| difficulty.get("nps").and_then(Value::as_f64)) {
+            min_nps = min_nps.min(nps);
+            max_nps = max_nps.max(nps);
+        }
+        if let Some(song) = song.as_object_mut() {
+            song.insert("songDetails".into(), details);
+        }
+    }
     let sync_url = playlist.pointer("/customData/syncURL").and_then(Value::as_str).unwrap_or_default();
     let id = sync_url.split("/id/").nth(1).and_then(|value| value.split('/').next())
         .filter(|value| !value.is_empty() && value.chars().all(|character| character.is_ascii_digit()))
@@ -456,10 +482,11 @@ fn local_playlist_details(playlist: Value, path: &Path) -> Value {
     let mut details = playlist.as_object().cloned().unwrap_or_default();
     details.insert("path".into(), json!(path));
     details.insert("nbMaps".into(), json!(songs.len()));
-    details.insert("nbMappers".into(), json!(0));
-    details.insert("duration".into(), json!(0));
-    details.insert("minNps".into(), json!(0));
-    details.insert("maxNps".into(), json!(0));
+    details.insert("songs".into(), json!(songs));
+    details.insert("nbMappers".into(), json!(mappers.len()));
+    details.insert("duration".into(), json!(duration));
+    details.insert("minNps".into(), json!(if min_nps.is_finite() { min_nps } else { 0.0 }));
+    details.insert("maxNps".into(), json!(if max_nps.is_finite() { max_nps } else { 0.0 }));
     if let Some(id) = id { details.insert("id".into(), json!(id)); }
     Value::Object(details)
 }
