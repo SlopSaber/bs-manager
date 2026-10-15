@@ -3,7 +3,7 @@ use std::{collections::HashMap, fs, path::{Path, PathBuf}, sync::{Arc, Mutex, at
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
-use tauri::{AppHandle, Emitter, Manager, Runtime, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, Manager, Runtime, WebviewUrl, WebviewWindow, WebviewWindowBuilder, window::{ProgressBarState, ProgressBarStatus}};
 use tauri_plugin_dialog::{DialogExt, FilePath};
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
@@ -700,7 +700,17 @@ async fn handle_request<R: Runtime>(
             app.opener().reveal_item_in_dir(path).map_err(|error| serialized_error(error.to_string(), "OPEN_PATH_FAILED"))?;
             Ok(Value::Null)
         }
-        "window.progression" => Ok(Value::Null),
+        "window.progression" => {
+            let progression = args.as_f64()
+                .filter(|progression| progression.is_finite())
+                .ok_or_else(|| serialized_error("Taskbar progress must be a number", "INVALID_PROGRESS"))?;
+            let progress = progression.clamp(0.0, 100.0).round() as u64;
+            window.set_progress_bar(ProgressBarState {
+                status: Some(ProgressBarStatus::Normal),
+                progress: Some(progress),
+            }).map_err(|error| serialized_error(error.to_string(), "TASKBAR_PROGRESS_FAILED"))?;
+            Ok(Value::Null)
+        }
         "restart-app" => {
             if window.label() != "main" {
                 return Err(serialized_error("Restart is only available in the main window", "WINDOW_NOT_ALLOWED"));

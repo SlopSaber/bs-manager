@@ -15,8 +15,8 @@ Each command type-checks the Tauri renderer contracts, builds all six HTML entry
 
 Current local installers compile successfully and are unsigned. The generated NSIS script contains both preinstall and preuninstall hook call sites. The hook code was included in the installer builds, but neither installer has been executed; migration, registry restoration, and uninstall behavior still need user-led review:
 
-- Preview: `release/tauri/preview/BSManager-Preview-1.6.0-x64-setup.exe`, SHA-256 `3f5074719bf687db0646e662f410aef5f699a3af86487bb4f97964b29ad85e97`.
-- Replacement: `release/tauri/replacement/BSManager-1.6.0-x64-setup.exe`, SHA-256 `bb24df36e498f5567ce5c4425337e87c3e712b6419ea360251d81fe3e07f371d`.
+- Preview: `release/tauri/preview/BSManager-Preview-1.6.0-x64-setup.exe`, SHA-256 `c8ab524fff336b1de31f6ed9ecf37918adb3c72b4200ecf2a35d19e834809260`.
+- Replacement: `release/tauri/replacement/BSManager-1.6.0-x64-setup.exe`, SHA-256 `6719dd2d9eb1ae71ff83e5658b71d33e74f071d196582e2329af0bfa450bdb9d`.
 
 ## Implemented in the Rust host
 
@@ -28,14 +28,14 @@ Current local installers compile successfully and are unsigned. The generated NS
 - BeatSaver detail caching for maps fetched during the current session and the `get-maps-info-from-cache` route. Playlist details use cached song metadata for duration, mapper count, NPS, and song details when available; the bulk scraped cache is not yet loaded or persisted.
 - Playlist listing, file import, install, delete, archive export, download, and one-click install. Download progress keeps the renderer’s existing payload shape.
 - BeatMods availability and health routes; installed-mod discovery, DLL/ZIP import, download and content-hash validation, installation, removal, and remove-all. Archive member paths reject traversal and symbolic links. IPA execution and network cancellation still need runtime review.
-- Update checks report no update. Download/install routes return `UPDATES_DISABLED` until a signed Tauri update endpoint is configured.
+- Update checks report no update. Download/install routes return `UPDATES_DISABLED` until a signed Tauri update endpoint is configured. Taskbar progress follows renderer progress on the originating window.
 - Static configuration commands preserve unrecognized fields during file round trips. Request streaming and cancellation are bound to the originating window.
 
 These routes compile. Their runtime behavior has not yet passed the user-led acceptance scenarios.
 
 ## Remaining parity work
 
-- Complete route coverage is outstanding. Bulk map-cache loading and persistence, taskbar progress, several OS-control operations, deep-link delivery review, and some configuration or library routes still need implementation or parity review. See the route names in `src/shared/models/ipc/ipc-routes.ts` and `src/main/ipcs` as the source inventory.
+- All shared Windows IPC route names are registered; the only shared routes absent from Rust are Linux-specific. Bulk map-cache loading and persistence, log redaction filters, deep-link delivery, and some configuration or library behavior still need implementation or parity review. See `src/shared/models/ipc/ipc-routes.ts` and `src/main/ipcs` for the source inventory.
 - Verify six-window behavior and window-specific capabilities. The shared renderer entry pages exist, but the auxiliary window lifecycle and remote authentication/webview isolation need acceptance review.
 - Finish first-run preview library import behavior and replacement install failure recovery. The replacement hook retains configuration and registry backups, but an uninstaller that succeeds before a later Tauri install failure still requires manual Electron reinstall for rollback. Exercise both hooks, protocol restoration, and rollback in user-led review. Replacement is not ready to replace an installed Electron build.
 - Complete Meta and Steam credential migration, download resume/error paths, map and playlist cache parity, mod dependency and IPA behavior, content sharing, archive interruption recovery, relocation, shortcuts, LIV integration, proxy behavior, process tracking, and signed update endpoint configuration.
