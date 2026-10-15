@@ -9,6 +9,8 @@ use tauri_plugin_dialog::{DialogExt, FilePath};
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
 
+mod library;
+
 const VERSION_LIBRARY: &str = include_str!("../../assets/jsons/bs-versions.json");
 const SUPPORTERS: &str = include_str!("../../assets/jsons/patreons.json");
 const INSTALL_FOLDER: &str = "BSManager";
@@ -19,6 +21,7 @@ const PREVIEW_IMPORT_MARKER: &str = "preview-legacy-settings-import";
 #[derive(Default)]
 struct AppState {
     window_arguments: Mutex<HashMap<String, Value>>,
+    library_operation: tokio::sync::Mutex<()>,
 }
 
 #[derive(Clone, Serialize)]
@@ -360,12 +363,48 @@ async fn handle_request<R: Runtime>(app: &AppHandle<R>, window: &WebviewWindow<R
         "bs-installer.set-install-path" => {
             let path = args.get("path").and_then(Value::as_str).filter(|value| !value.trim().is_empty())
                 .ok_or_else(|| serialized_error("Install path is required", "INVALID_INSTALL_PATH"))?;
-            if args.get("move").and_then(Value::as_bool).unwrap_or(false) {
-                return Err(serialized_error("Moving an existing library is not available in this preview", "NOT_IMPLEMENTED"));
-            }
-            let mut settings = read_settings(app).map_err(|error| serialized_error(error, "SETTINGS_READ_FAILED"))?;
-            let parent = normalize_install_parent(PathBuf::from(path.trim()));
+            let move_existing = args.get("move").and_then(Value::as_bool).unwrap_or(false);
+            let parent = if move_existing {
+                let chosen = library::canonicalize_existing_directory(Path::new(path.trim()))
+                    .map_err(|error| serialized_error(error, "INVALID_FOLDER"))?;
+                normalize_install_parent(chosen)
+            } else {
+                normalize_install_parent(PathBuf::from(path.trim()))
+            };
             let install_path = parent.join(INSTALL_FOLDER);
+
+            if move_existing {
+                let app_state = app.state::<AppState>();
+                let _operation = app_state.library_operation.lock().await;
+                let old_directory = install_directory(app)
+                    .map_err(|error| serialized_error(error, "INSTALL_PATH_FAILED"))?;
+                let source = old_directory.clone();
+                let destination = install_path.clone();
+                let copied = tokio::task::spawn_blocking(move || library::copy_library(&source, &destination))
+                    .await
+                    .map_err(|error| serialized_error(format!("Library move worker failed: {error}"), "LIBRARY_MOVE_FAILED"))?
+                    .map_err(|error| match error {
+                        library::LibraryError::CopyToSubpath => serialized_error(
+                            "The destination cannot be inside or above the current library",
+                            "COPY_TO_SUBPATH",
+                        ),
+                        library::LibraryError::Io(error) => serialized_error(error.to_string(), "LIBRARY_MOVE_FAILED"),
+                    })?;
+
+                let mut settings = read_settings(app).map_err(|error| serialized_error(error, "SETTINGS_READ_FAILED"))?;
+                settings.insert("installation-folder".into(), json!(parent));
+                write_settings(app, &settings).map_err(|error| serialized_error(error, "SETTINGS_WRITE_FAILED"))?;
+
+                if copied {
+                    tokio::task::spawn_blocking(move || library::remove_library(&old_directory))
+                        .await
+                        .map_err(|error| serialized_error(format!("Library cleanup worker failed: {error}"), "LIBRARY_MOVE_CLEANUP_FAILED"))?
+                        .map_err(|error| serialized_error(error.to_string(), "LIBRARY_MOVE_CLEANUP_FAILED"))?;
+                }
+                return Ok(json!(install_path));
+            }
+
+            let mut settings = read_settings(app).map_err(|error| serialized_error(error, "SETTINGS_READ_FAILED"))?;
             settings.insert("installation-folder".into(), json!(parent));
             write_settings(app, &settings).map_err(|error| serialized_error(error, "SETTINGS_WRITE_FAILED"))?;
             Ok(json!(install_path))
