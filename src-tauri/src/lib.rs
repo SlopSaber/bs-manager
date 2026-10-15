@@ -12,6 +12,7 @@ use tauri_plugin_opener::OpenerExt;
 mod library;
 mod launch;
 mod linker;
+mod liv;
 mod meta;
 mod models;
 mod oculus;
@@ -643,7 +644,13 @@ async fn handle_request<R: Runtime>(
             let app_state = app.state::<AppState>();
             let _operation = app_state.library_operation.lock().await;
             let app = app.clone();
-            tokio::task::spawn_blocking(move || versions::get_installed_versions(&app))
+            tokio::task::spawn_blocking(move || {
+                let installed = versions::get_installed_versions(&app)?;
+                if let Err(error) = liv::sync(&app, &installed) {
+                    log::warn!("Could not synchronize LIV shortcuts: {error}");
+                }
+                Ok(installed)
+            })
                 .await
                 .map_err(|error| serialized_error(format!("Version scan worker failed: {error}"), "VERSION_SCAN_FAILED"))?
         }
@@ -863,7 +870,10 @@ async fn ipc_send<R: Runtime>(app: AppHandle<R>, window: WebviewWindow<R>, chann
 #[tauri::command]
 fn register_protocol<R: Runtime>(app: AppHandle<R>, window: WebviewWindow<R>, protocol: String) -> Result<bool, String> {
     if window.label() != "main" { return Err("Protocol registration is only available in the main window".to_owned()); }
-    let supported = ["bsmanager", "beatsaver", "web+bsmap", "bsplaylist", "modelsaber"];
+    let supported = ["bsmanager", "bsmanager-preview", "beatsaver", "web+bsmap", "bsplaylist", "modelsaber"];
+    if protocol == "bsmanager-preview" && app.config().identifier != "io.bsmanager.bsmanager.preview" {
+        return Err("Preview launch links are only available in the preview profile".to_owned());
+    }
     if !supported.contains(&protocol.as_str()) { return Err("Unsupported BSManager protocol".to_owned()); }
     protocols::set(&app, &protocol, true)?;
     Ok(true)
@@ -875,10 +885,10 @@ fn is_application_window(label: &str) -> bool {
 
 fn handle_launch_argument<R: Runtime>(app: &AppHandle<R>, argument: &str) {
     if let Ok(url) = url::Url::parse(argument) {
-        if ["bsmanager", "beatsaver", "web+bsmap", "bsplaylist", "modelsaber"].contains(&url.scheme()) {
+        if ["bsmanager", "bsmanager-preview", "beatsaver", "web+bsmap", "bsplaylist", "modelsaber"].contains(&url.scheme()) {
             let mut args = Map::new();
             let template = match url.scheme() {
-                "bsmanager" if url.host_str() == Some("launch") => {
+                "bsmanager" | "bsmanager-preview" if url.host_str() == Some("launch") => {
                     for (key, value) in url.query_pairs() {
                         args.insert(key.into_owned(), Value::String(value.into_owned()));
                     }
@@ -1076,6 +1086,16 @@ pub fn run() {
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .invoke_handler(tauri::generate_handler![ipc_send, register_protocol])
         .setup(|app| {
+            let launch_protocol = shortcuts::launch_protocol(app.handle());
+            match protocols::is_registered(app.handle(), launch_protocol) {
+                Ok(true) => {}
+                Ok(false) => {
+                    if let Err(error) = protocols::set(app.handle(), launch_protocol, true) {
+                        log::warn!("Could not register BSManager launch links: {error}");
+                    }
+                }
+                Err(error) => log::warn!("Could not inspect BSManager launch link registration: {error}"),
+            }
             map_info_cache::initialize(app.handle());
             let cache_app = app.handle().clone();
             tauri::async_runtime::spawn(async move { song_cache::initialize(&cache_app).await; });

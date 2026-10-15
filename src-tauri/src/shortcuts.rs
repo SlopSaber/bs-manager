@@ -10,7 +10,7 @@ pub async fn create_launch_shortcut<R: Runtime>(app: &AppHandle<R>, args: &Value
     let Some(options) = args.get("options") else { return false };
     let Some(version) = options.get("version") else { return false };
     let Some(version_id) = version.get("BSVersion").and_then(Value::as_str).filter(|value| !value.is_empty()) else { return false };
-    let launch_url = build_launch_url(options);
+    let launch_url = build_launch_url(app, options);
     let version_name = version.get("name").and_then(Value::as_str).unwrap_or_default();
     let shortcut_name = sanitize_shortcut_name(&format!("Beat Saber {version_id} {version_name}"));
     if shortcut_name.is_empty() { return false; }
@@ -22,7 +22,7 @@ pub async fn create_launch_shortcut<R: Runtime>(app: &AppHandle<R>, args: &Value
     }
 }
 
-fn build_launch_url(options: &Value) -> String {
+pub(crate) fn build_launch_url<R: Runtime>(app: &AppHandle<R>, options: &Value) -> String {
     let version = options.get("version").unwrap_or(&Value::Null);
     let mut params = url::form_urlencoded::Serializer::new(String::new());
     if let Some(value) = version.get("BSVersion").and_then(Value::as_str) { params.append_pair("version", value); }
@@ -34,12 +34,21 @@ fn build_launch_url(options: &Value) -> String {
     if let Some(mods) = options.get("launchMods").and_then(Value::as_array) {
         for (mod_name, key) in [
             ("oculus", "oculusMode"), ("fpfc", "desktopMode"), ("debug", "debug"),
-            ("editor", "mapEditor"), ("proton_logs", "protonLogs"), ("parallel_views", "parallelViews"),
+            ("skip_steam", "skipSteam"), ("editor", "mapEditor"), ("proton_logs", "protonLogs"),
+            ("parallel_views", "parallelViews"),
         ] {
             if mods.iter().any(|value| value.as_str() == Some(mod_name)) { params.append_pair(key, "true"); }
         }
     }
-    format!("bsmanager://launch?{}", params.finish())
+    format!("{}://launch?{}", launch_protocol(app), params.finish())
+}
+
+pub(crate) fn launch_protocol<R: Runtime>(app: &AppHandle<R>) -> &'static str {
+    if app.config().identifier == "io.bsmanager.bsmanager.preview" {
+        "bsmanager-preview"
+    } else {
+        "bsmanager"
+    }
 }
 
 fn create_desktop_shortcut<R: Runtime>(app: &AppHandle<R>, name: &str, launch_url: &str) -> bool {
