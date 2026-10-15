@@ -107,6 +107,81 @@ pub async fn delete_maps<R: Runtime>(
     Ok(Value::Null)
 }
 
+pub fn validate_managed_map_path<R: Runtime>(app: &AppHandle<R>, path: &Path) -> Result<PathBuf, SerializedError> {
+    let path = fs::canonicalize(path).map_err(|error| serialized_error(error.to_string(), "INVALID_PATH"))?;
+    let roots = managed_map_roots(app)?;
+    if path.is_dir() && roots.iter().any(|root| path.parent() == Some(root.as_path())) {
+        Ok(path)
+    } else {
+        Err(serialized_error("Map folder is outside managed content", "INVALID_PATH"))
+    }
+}
+
+pub async fn copy_managed_map_to_version<R: Runtime>(
+    app: &AppHandle<R>,
+    source: &Path,
+    version: &Value,
+) -> Result<PathBuf, SerializedError> {
+    let source = validate_managed_map_path(app, source)?;
+    let root = map_folder(app, version)?;
+    tokio::fs::create_dir_all(&root).await
+        .map_err(|error| serialized_error(error.to_string(), "MAP_FOLDER_FAILED"))?;
+    let root = tokio::fs::canonicalize(&root).await
+        .map_err(|error| serialized_error(error.to_string(), "MAP_FOLDER_FAILED"))?;
+    if source.parent() == Some(root.as_path()) { return Ok(source); }
+    let destination = root.join(source.file_name().unwrap_or_default());
+    if fs::symlink_metadata(&destination).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
+        return Err(serialized_error("Map destination cannot be a symbolic link", "INVALID_PATH"));
+    }
+    let source_for_copy = source.clone();
+    let destination_for_copy = destination.clone();
+    tokio::task::spawn_blocking(move || copy_map_directory(&source_for_copy, &destination_for_copy)).await
+        .map_err(|error| serialized_error(error.to_string(), "MAP_COPY_FAILED"))??;
+    Ok(destination)
+}
+
+pub async fn delete_maps_by_hashes<R: Runtime>(
+    app: &AppHandle<R>,
+    window: &WebviewWindow<R>,
+    response_channel: Option<&str>,
+    version: &Value,
+    hashes: &[String],
+    cancelled: Arc<AtomicBool>,
+) -> Result<Value, SerializedError> {
+    let root = map_folder(app, version)?;
+    let root = match fs::canonicalize(&root) {
+        Ok(root) => root,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            emit_hash_delete_progress(window, response_channel, 0, hashes.len() as u64)?;
+            return Ok(Value::Null);
+        }
+        Err(error) => return Err(serialized_error(error.to_string(), "MAP_FOLDER_FAILED")),
+    };
+    let folders = fs::read_dir(&root).map_err(|error| serialized_error(error.to_string(), "MAP_FOLDER_FAILED"))?
+        .filter_map(Result::ok).map(|entry| entry.path()).filter(|path| path.is_dir()).collect::<Vec<_>>();
+    let total = hashes.len() as u64;
+    let mut current = 0_u64;
+    emit_hash_delete_progress(window, response_channel, current, total)?;
+    for folder in folders {
+        if cancelled.load(Ordering::Relaxed) {
+            return Err(serialized_error("Playlist map deletion was cancelled", "REQUEST_CANCELLED"));
+        }
+        let folder_for_load = folder.clone();
+        let map = tokio::task::spawn_blocking(move || load_map_info(&folder_for_load)).await
+            .map_err(|error| serialized_error(error.to_string(), "MAP_LOAD_FAILED"))?;
+        if let Ok(Some(map)) = map {
+            if map.get("hash").and_then(Value::as_str).is_some_and(|hash| hashes.iter().any(|wanted| wanted.eq_ignore_ascii_case(hash))) {
+                let canonical = validate_managed_map_path(app, &folder)?;
+                tokio::fs::remove_dir_all(canonical).await
+                    .map_err(|error| serialized_error(error.to_string(), "MAP_DELETE_FAILED"))?;
+                current = current.saturating_add(1);
+            }
+        }
+        emit_hash_delete_progress(window, response_channel, current, total)?;
+    }
+    Ok(Value::Null)
+}
+
 pub async fn export_maps<R: Runtime>(
     app: &AppHandle<R>,
     window: &WebviewWindow<R>,
@@ -900,6 +975,19 @@ fn emit_delete_progress<R: Runtime>(
 ) -> Result<(), SerializedError> {
     if let Some(channel) = response_channel {
         window.emit(channel, json!({ "total": total, "deleted": deleted }))
+            .map_err(|error| serialized_error(error.to_string(), "IPC_EMIT_FAILED"))?;
+    }
+    Ok(())
+}
+
+fn emit_hash_delete_progress<R: Runtime>(
+    window: &WebviewWindow<R>,
+    response_channel: Option<&str>,
+    current: u64,
+    total: u64,
+) -> Result<(), SerializedError> {
+    if let Some(channel) = response_channel {
+        window.emit(channel, json!({ "current": current, "total": total }))
             .map_err(|error| serialized_error(error.to_string(), "IPC_EMIT_FAILED"))?;
     }
     Ok(())

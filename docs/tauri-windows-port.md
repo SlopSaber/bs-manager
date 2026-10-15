@@ -1,38 +1,41 @@
 # Windows Tauri port status
 
-The `rewrite/tauri-windows` branch keeps the Electron application as the rollback build and adds a Tauri 2 Windows build. The React renderer and all six HTML entry pages are shared. Version remains `1.6.0`.
+The `rewrite/tauri-windows` branch keeps the Electron application available for rollback and builds a Windows Tauri 2 application from the existing React renderer. The app version remains `1.6.0` for local artifacts.
 
-## Local builds
+## Build
 
-Use Node 24 from `.nvmrc`, pnpm 10.34.4, Rust MSVC for `x86_64-pc-windows-msvc`, Microsoft C++ Build Tools, and WebView2. From the repository root, run:
+Use Node 24 from `.nvmrc`, pnpm 10.34.4, Rust MSVC for `x86_64-pc-windows-msvc`, Microsoft C++ Build Tools, and WebView2. From the repository root:
 
 ```powershell
 pnpm run build:tauri:win
 pnpm run build:tauri:win:replacement
 ```
 
-The commands build the renderer, compile Rust, create NSIS installers, and write SHA-256 metadata under `release/tauri/preview` and `release/tauri/replacement`. Current local artifacts are unsigned. The Windows GitHub workflow builds only the preview profile and runs no tests.
+Each command type-checks the Tauri renderer contracts, builds all six HTML entry pages, compiles Rust, creates an NSIS installer, and writes SHA-256 metadata under `release/tauri/<profile>`. The Windows workflow is build-only and runs no tests.
 
-## Ported foundation
+Current local installers compile successfully and are unsigned:
 
-- Preview and replacement have separate Tauri identifiers. Preview settings use Tauri's preview app configuration directory. Replacement uses a separate identifier from preview.
-- Main window dimensions, minimum size, frameless title bar, six renderer entry pages, single-instance callback, custom file-drop events, local version catalog, static setting read and write, native dialogs, protocol registration calls, and window controls compile in the Rust host.
-- Preview installer does not declare protocol or file associations. Protocol registration happens only when the renderer calls the registration routes.
-- ModelSaber lookup/search, model download, one-click install, local model listing/hash lookup, export, and deletion are implemented in Rust.
-- BeatSaver map search, map lookup by ID or hashes, playlist search, and playlist details use the existing renderer request shapes. Map hash lookups retain an in-memory cache and tolerate failed hash batches as the Electron service does.
-- Local map listing supports Info.dat versions 2, 3, and 4, computes Beat Saber SHA-1 hashes, records added dates, and streams the existing listing progress shape. Import/export preserve the current ZIP layout and progress shapes; deletion is limited to direct children of managed CustomLevels folders.
-- BeatSaver map downloads and one-click installs validate HTTPS redirects, extract into a staging folder, verify the Beat Saber hash, and then install. `last-downloaded-map` streams completed downloads to the renderer.
-- Build metadata records profile, identifier, version, installer name, hash, and signing status.
+- Preview: `release/tauri/preview/BSManager-Preview-1.6.0-x64-setup.exe`, SHA-256 `e32e3cc2ed0834e6fb816baee6b6c80d8c9f327cec8e18543acf4008c94fddb1`.
+- Replacement: `release/tauri/replacement/BSManager-1.6.0-x64-setup.exe`, SHA-256 `8824506328847f99d36872d847334b1a3ab28911b27f412c39a7fb37c6f62948`.
 
-## Parity still required
+## Implemented in the Rust host
 
-This branch is an early port foundation. It does not provide full BSManager parity and is not ready to replace an installed Electron build. Rust currently returns `NOT_IMPLEMENTED` for game operations it does not own.
+- Separate preview and replacement identifiers and settings directories. The preview installer does not claim protocols or file extensions. Settings read/write, install-folder selection, and explicit legacy-settings import routes exist.
+- Main window setup, native dialogs, window controls, drag/drop events, single-instance handling, protocol registration, local version catalog, installation-folder operations, local version discovery/edit/clone, shared-folder links, and launch-shortcut creation.
+- Steam sidecar download routes, Meta login/session routes, Meta downloads, game launch, Windows VR runtime and sideload controls, and supporter data.
+- ModelSaber search and lookup; model download, one-click installation, local listing, export, and deletion.
+- BeatSaver map and playlist search/details; local map listing, deletion, import/export, download, and one-click install. Map installs stage archive extraction, compute the Beat Saber hash, validate it against BeatSaver, then move the map into the managed folder.
+- Playlist listing, file import, install, delete, archive export, download, and one-click install. Download progress keeps the renderer’s existing payload shape. Local playlist statistics and cached song detail enrichment remain incomplete.
+- Static configuration commands preserve unrecognized fields during file round trips. Request streaming and cancellation are bound to the originating window.
 
-- Steam and Meta discovery, login, download, verification, cancellation, game launch, playlist operations, mod management, sharing, junctions, cache operations, relocation, shortcuts, LIV, proxy support, process tracking, and updater behavior still need Rust implementations.
-- Installed-version discovery currently scans only `BSInstances` under the selected BSManager folder. Steam and Meta library discovery and legacy metadata import remain outstanding.
-- Preview has no explicit importer for Electron settings. Replacement does not back up settings, invoke the Electron uninstaller, or install transactionally. Do not distribute or install the replacement artifact until those steps exist.
-- Map and model deep links can reach their one-click Rust routes. Playlist install and `.bplist` file operations remain outstanding.
-- Local media path authorization, complete IPC route coverage, progress streaming, cancellation ownership, and visual comparison at 100%, 125%, and 150% scaling remain outstanding.
-- Build success proves frontend and Rust compilation plus installer packaging. It does not prove runtime behavior or UI parity. No tests or interactive desktop sessions were run.
+These routes compile. Their runtime behavior has not yet passed the user-led acceptance scenarios.
 
-Keep the existing Electron installer for rollback. Preview and replacement artifacts are build outputs only until the missing migration and runtime paths are implemented and reviewed.
+## Remaining parity work
+
+- Complete route coverage is outstanding. Mod management, map-details cache reads, update download/install, uninstall, several OS-control operations, deep-link delivery for every scheme, and some configuration or library routes still need implementation or parity review. See the route names in `src/shared/models/ipc/ipc-routes.ts` and `src/main/ipcs` as the source inventory.
+- Verify six-window behavior and window-specific capabilities. The shared renderer entry pages exist, but the auxiliary window lifecycle and remote authentication/webview isolation need acceptance review.
+- Finish preview settings and library import behavior, replacement backup and legacy uninstallation, installer failure recovery, protocol ownership restoration, and rollback instructions. Replacement is not ready to replace an installed Electron build.
+- Complete Meta and Steam credential migration, download resume/error paths, map and playlist cache parity, mods, content sharing, archive safety, relocation, shortcuts, LIV integration, proxy behavior, process tracking, and update signing configuration.
+- Complete visual comparison at 100%, 125%, and 150% display scaling, in light and dark themes, with custom colors and default, minimum, and maximized window sizes. Build success does not establish visual or functional parity.
+
+Keep the existing Electron installer for rollback. Current Tauri installers are local build artifacts only. Do not distribute or install the replacement profile until migration, installer recovery, runtime parity, and visual review are complete.

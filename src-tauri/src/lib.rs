@@ -22,6 +22,7 @@ mod versions;
 mod windows_integration;
 mod beat_saver;
 mod maps;
+mod playlists;
 
 const VERSION_LIBRARY: &str = include_str!("../../assets/jsons/bs-versions.json");
 const SUPPORTERS: &str = include_str!("../../assets/jsons/patreons.json");
@@ -416,6 +417,29 @@ async fn handle_request<R: Runtime>(
             let _operation = app_state.library_operation.lock().await;
             maps::import_maps(app, window, response_channel, &args, cancelled).await
         }
+        "get-version-playlists-details" => playlists::get_version_playlists(app, window, response_channel, &args, cancelled).await,
+        "install-playlist-file" => playlists::install_playlist(app, &args),
+        "import-playlists" => {
+            let app_state = app.state::<AppState>();
+            let _operation = app_state.library_operation.lock().await;
+            playlists::import_playlists(app, window, response_channel, &args, cancelled).await
+        }
+        "delete-playlist" => {
+            let app_state = app.state::<AppState>();
+            let _operation = app_state.library_operation.lock().await;
+            playlists::delete_playlist(app, window, response_channel, &args, cancelled).await
+        }
+        "export-playlists" => playlists::export_playlists(app, window, response_channel, &args, cancelled).await,
+        "download-playlist" => {
+            let app_state = app.state::<AppState>();
+            let _operation = app_state.library_operation.lock().await;
+            playlists::download_playlist(app, window, response_channel, &args, cancelled).await
+        }
+        "one-click-install-playlist" => {
+            let app_state = app.state::<AppState>();
+            let _operation = app_state.library_operation.lock().await;
+            playlists::one_click_install_playlist(app, window, response_channel, &args, cancelled).await
+        }
         "bs-maps.download-map" => {
             let app_state = app.state::<AppState>();
             let _operation = app_state.library_operation.lock().await;
@@ -727,7 +751,7 @@ async fn ipc_send<R: Runtime>(app: AppHandle<R>, window: WebviewWindow<R>, chann
             log::warn!("Windows Tauri one-way route '{channel}' failed: {}", error.message);
         }
     } else {
-        ipc_response(&window, &channel, &request, result, matches!(channel.as_str(), "import-version" | "download-bs-version" | "auto-download-bs-version" | "download-bs-version-qr" | "bs-oculus-download" | "bs-launch.launch" | "download-model" | "get-version-models" | "export-models" | "delete-models" | "load-version-maps" | "delete-maps" | "export-maps" | "bs-maps.import-maps" | "last-downloaded-map"));
+        ipc_response(&window, &channel, &request, result, matches!(channel.as_str(), "import-version" | "download-bs-version" | "auto-download-bs-version" | "download-bs-version-qr" | "bs-oculus-download" | "bs-launch.launch" | "download-model" | "get-version-models" | "export-models" | "delete-models" | "load-version-maps" | "delete-maps" | "export-maps" | "bs-maps.import-maps" | "get-version-playlists-details" | "import-playlists" | "delete-playlist" | "export-playlists" | "download-playlist" | "one-click-install-playlist" | "last-downloaded-map"));
     }
 }
 
