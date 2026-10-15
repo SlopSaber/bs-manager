@@ -2,8 +2,8 @@ import { defaultIfEmpty, share } from "rxjs/operators";
 import { Observable, ReplaySubject, identity } from "rxjs";
 import { IpcRequest } from "shared/models/ipc";
 import { deserializeError } from 'serialize-error';
-import { IpcCompleteChannel, IpcErrorChannel, IpcTearDownChannel } from "shared/models/ipc/ipc-response.interface";
 import { IpcChannels, IpcRequestType, IpcResponseType } from "shared/models/ipc/ipc-routes";
+import { IpcStreamMessage } from "shared/models/ipc/ipc-stream-message.interface";
 
 export class IpcService {
     private static instance: IpcService;
@@ -18,32 +18,43 @@ export class IpcService {
     private constructor() {}
 
     public sendLazy<T = unknown>(channel: string, request?: IpcRequest<T>): void {
-        window.desktop.ipcRenderer.sendMessage(channel, request);
+        window.desktop.ipcRenderer.sendLazy(channel, request?.args);
     }
 
     public sendV2<C extends IpcChannels>(channel: C, data?: IpcRequestType<C>, defaultValue?: IpcResponseType<C>): Observable<IpcResponseType<C>> {
-
-        const request: IpcRequest<IpcRequestType<C>> = {
-            args: data,
-            responceChannel: `${channel}_responce_${crypto.randomUUID()}`
-        };
-
-        const completeChannel: IpcCompleteChannel = `${request.responceChannel}_complete`;
-        const errorChannel: IpcErrorChannel = `${request.responceChannel}_error`;
-        const teardownChannel: IpcTearDownChannel = `${request.responceChannel}_teardown`;
+        const requestId = crypto.randomUUID();
 
         const obs = new Observable<IpcResponseType<C>>(observer => {
-            window.desktop.ipcRenderer.on(request.responceChannel, (res: IpcResponseType<C>) => observer.next(res));
-            window.desktop.ipcRenderer.on(errorChannel, (err) => observer.error(deserializeError(err)));
-            window.desktop.ipcRenderer.on(completeChannel, () => observer.complete());
+            let settled = false;
+            const onEvent = (message: IpcStreamMessage<IpcResponseType<C>>) => {
+                if (settled) return;
+                if (message.kind === "value") {
+                    observer.next(message.payload);
+                } else if (message.kind === "error") {
+                    settled = true;
+                    observer.error(deserializeError(message.payload));
+                } else if (message.kind === "complete") {
+                    settled = true;
+                    observer.complete();
+                } else {
+                    settled = true;
+                    observer.error(new Error("Invalid IPC stream message"));
+                }
+            };
 
-            window.desktop.ipcRenderer.sendMessage(channel as string, request);
+            void window.desktop.ipcRenderer.request(requestId, channel as string, data, onEvent)
+                .catch(error => {
+                    if (!settled) {
+                        settled = true;
+                        observer.error(deserializeError(error));
+                    }
+                });
 
             return () => {
-                window.desktop.ipcRenderer.removeAllListeners(request.responceChannel);
-                window.desktop.ipcRenderer.removeAllListeners(errorChannel);
-                window.desktop.ipcRenderer.removeAllListeners(completeChannel);
-                window.desktop.ipcRenderer.sendMessage(teardownChannel, null);
+                if (!settled) {
+                    settled = true;
+                    void window.desktop.ipcRenderer.cancelRequest(requestId).catch(console.error);
+                }
             };
         }).pipe(defaultValue ? defaultIfEmpty(defaultValue) : identity, share({connector: () => new ReplaySubject(1)}));
 

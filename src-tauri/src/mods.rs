@@ -9,7 +9,7 @@ use std::{
 
 use futures_util::StreamExt;
 use serde_json::{Value, json};
-use tauri::{AppHandle, Emitter, Runtime, WebviewWindow};
+use tauri::{AppHandle, Runtime, WebviewWindow};
 use tokio::{io::AsyncReadExt, process::Command, time::timeout};
 use zip::ZipArchive;
 
@@ -544,7 +544,7 @@ fn emit_progress<R: Runtime>(
             if !data.is_null() { object.insert("data".into(), data); }
             if let Some(error) = last_error { object.insert("lastError".into(), error); }
         }
-        window.emit(channel, value).map_err(|error| serialized_error(error.to_string(), "IPC_EMIT_FAILED"))?;
+        crate::emit_response_value(window, Some(channel), value)?;
     }
     Ok(())
 }

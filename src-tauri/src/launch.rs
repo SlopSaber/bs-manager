@@ -6,7 +6,7 @@ use std::{
 
 use serde::Deserialize;
 use serde_json::{Value, json};
-use tauri::{AppHandle, Emitter, Manager, Runtime, WebviewWindow, path::BaseDirectory};
+use tauri::{AppHandle, Manager, Runtime, WebviewWindow, path::BaseDirectory};
 use tokio::{process::Command, time::{Instant as TokioInstant, sleep, timeout, timeout_at}};
 use chrono::{DateTime, Utc};
 
@@ -391,7 +391,7 @@ fn quote_windows_argument(value: &str) -> String {
 
 fn emit_event<R: Runtime>(window: &WebviewWindow<R>, response_channel: Option<&str>, kind: &str) {
     if let Some(channel) = response_channel {
-        let _ = window.emit(channel, json!({ "type": kind }));
+        let _ = crate::emit_response_value(window, Some(channel), json!({ "type": kind }));
     }
 }
 

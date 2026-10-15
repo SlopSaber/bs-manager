@@ -9,7 +9,7 @@ use std::{
 
 use futures_util::StreamExt;
 use serde_json::{Value, json};
-use tauri::{AppHandle, Emitter, Manager, Runtime, WebviewWindow};
+use tauri::{AppHandle, Manager, Runtime, WebviewWindow};
 use tokio::io::AsyncWriteExt;
 use url::Url;
 use zip::{CompressionMethod, write::{SimpleFileOptions, ZipWriter}};
@@ -379,8 +379,7 @@ fn emit_download_progress<R: Runtime>(
     data: Value,
 ) -> Result<(), SerializedError> {
     if let Some(channel) = response_channel {
-        window.emit(channel, json!({ "current": current, "total": total, "data": if data.is_null() { json!(path.to_string_lossy()) } else { data } }))
-            .map_err(|error| serialized_error(error.to_string(), "IPC_EMIT_FAILED"))?;
+        crate::emit_response_value(window, Some(channel), json!({ "current": current, "total": total, "data": if data.is_null() { json!(path.to_string_lossy()) } else { data } }))?;
     }
     Ok(())
 }
@@ -467,8 +466,7 @@ fn emit_model_progress<R: Runtime>(
         if let (Some(data), Some(object)) = (data, progression.as_object_mut()) {
             object.insert("data".to_owned(), data);
         }
-        window.emit(channel, progression)
-            .map_err(|error| serialized_error(error.to_string(), "IPC_EMIT_FAILED"))?;
+        crate::emit_response_value(window, Some(channel), progression)?;
     }
     Ok(())
 }

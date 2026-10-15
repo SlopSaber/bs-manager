@@ -156,9 +156,9 @@ Linux Proton routes are intentionally outside this Windows-only rewrite: `linux.
 
 ## Events and request streams
 
-- [ ] Response channel carries every progress/result item in order and preserves serialized field names and large manifest IDs.
-- [ ] Response channel `_complete` closes observable after final value; error channel `_error` preserves message and code.
-- [ ] `_teardown` cancels work only for originating window; closing that window cancels its outstanding work and releases request entries.
+- [ ] Tauri Channel carries every progress/result item in order and preserves serialized field names and large manifest IDs.
+- [ ] Channel completion closes observable after final value; stream errors preserve message and code.
+- [ ] `cancel_request` cancels work only for originating window; closing that window cancels its outstanding work and releases request entries.
 - [ ] Window arguments reach the intended app window on cold start, warm open, and reuse of an existing window.
 - [ ] `desktop-files-dropped` reports native file paths to the correct window and preserves drop target semantics.
 - [ ] Launch stream preserves `STEAM_LAUNCHING`, `STEAM_LAUNCHED`, `BS_LAUNCHING`, and `UNABLE_TO_LAUNCH_STEAM` payload behavior.

@@ -10,7 +10,7 @@ use chrono::Local;
 use futures_util::StreamExt;
 use serde_json::{Map, Value, json};
 use sha1::{Digest, Sha1};
-use tauri::{AppHandle, Emitter, Runtime, WebviewWindow};
+use tauri::{AppHandle, Runtime, WebviewWindow};
 use tokio::io::AsyncWriteExt;
 use url::Url;
 use zip::{CompressionMethod, ZipArchive, write::{SimpleFileOptions, ZipWriter}};
@@ -394,8 +394,7 @@ pub async fn stream_last_downloaded<R: Runtime>(
     let mut receiver = LAST_DOWNLOADED.get_or_init(|| tokio::sync::broadcast::channel(32).0).subscribe();
     while !cancelled.load(Ordering::Relaxed) {
         match tokio::time::timeout(Duration::from_millis(250), receiver.recv()).await {
-            Ok(Ok(value)) => window.emit(channel, value)
-                .map_err(|error| serialized_error(error.to_string(), "IPC_EMIT_FAILED"))?,
+            Ok(Ok(value)) => crate::emit_response_value(window, Some(channel), value)?,
             Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) | Err(_) => {},
             Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => break,
         }
@@ -642,7 +641,7 @@ fn emit_import_progress<R: Runtime>(
         if let (Some(object), Some(data)) = (value.as_object_mut(), data) {
             object.insert("data".into(), data);
         }
-        window.emit(channel, value).map_err(|error| serialized_error(error.to_string(), "IPC_EMIT_FAILED"))?;
+        crate::emit_response_value(window, Some(channel), value)?;
     }
     Ok(())
 }
@@ -705,8 +704,7 @@ fn emit_archive_progress<R: Runtime>(
     output: &str,
 ) -> Result<(), SerializedError> {
     if let Some(channel) = response_channel {
-        window.emit(channel, json!({ "current": current, "total": total, "data": output }))
-            .map_err(|error| serialized_error(error.to_string(), "IPC_EMIT_FAILED"))?;
+        crate::emit_response_value(window, Some(channel), json!({ "current": current, "total": total, "data": output }))?;
     }
     Ok(())
 }
@@ -982,8 +980,7 @@ fn emit_load_progress<R: Runtime>(
     maps: &[Value],
 ) -> Result<(), SerializedError> {
     if let Some(channel) = response_channel {
-        window.emit(channel, json!({ "total": total, "loaded": loaded, "maps": maps }))
-            .map_err(|error| serialized_error(error.to_string(), "IPC_EMIT_FAILED"))?;
+        crate::emit_response_value(window, Some(channel), json!({ "total": total, "loaded": loaded, "maps": maps }))?;
     }
     Ok(())
 }
@@ -995,8 +992,7 @@ fn emit_delete_progress<R: Runtime>(
     deleted: u64,
 ) -> Result<(), SerializedError> {
     if let Some(channel) = response_channel {
-        window.emit(channel, json!({ "total": total, "deleted": deleted }))
-            .map_err(|error| serialized_error(error.to_string(), "IPC_EMIT_FAILED"))?;
+        crate::emit_response_value(window, Some(channel), json!({ "total": total, "deleted": deleted }))?;
     }
     Ok(())
 }
@@ -1008,8 +1004,7 @@ fn emit_hash_delete_progress<R: Runtime>(
     total: u64,
 ) -> Result<(), SerializedError> {
     if let Some(channel) = response_channel {
-        window.emit(channel, json!({ "current": current, "total": total }))
-            .map_err(|error| serialized_error(error.to_string(), "IPC_EMIT_FAILED"))?;
+        crate::emit_response_value(window, Some(channel), json!({ "current": current, "total": total }))?;
     }
     Ok(())
 }

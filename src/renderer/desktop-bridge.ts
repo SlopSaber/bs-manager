@@ -1,6 +1,7 @@
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import type { IpcStreamMessage } from "shared/models/ipc/ipc-stream-message.interface";
 
 type Listener = (...args: unknown[]) => void;
 
@@ -58,11 +59,16 @@ function join(...parts: string[]): string {
 window.desktop = {
     platform: "win32",
     ipcRenderer: {
-        sendMessage(channel, args) {
-            const pendingListeners = Array.from(subscriptions.values()).flatMap(listeners => Array.from(listeners.values()));
-            void Promise.all(pendingListeners)
-                .then(() => invoke("ipc_send", { channel, args }))
-                .catch(console.error);
+        request(requestId, channel, args, onEvent) {
+            const response = new Channel<IpcStreamMessage>();
+            response.onmessage = onEvent;
+            return invoke<void>("request", { requestId, channel, args: args ?? null, onEvent: response });
+        },
+        sendLazy(channel, args) {
+            void invoke("send_lazy", { channel, args: args ?? null }).catch(console.error);
+        },
+        cancelRequest(requestId) {
+            return invoke<void>("cancel_request", { requestId });
         },
         on(channel, listener) {
             listenTo(channel, listener);

@@ -2,9 +2,9 @@ use std::{collections::HashMap, fs, path::{Path, PathBuf}, sync::{Arc, Mutex, at
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use futures_util::StreamExt;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::{Map, Value, json};
-use tauri::{AppHandle, Emitter, Manager, Runtime, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent, window::{ProgressBarState, ProgressBarStatus}};
+use tauri::{AppHandle, Emitter, Manager, Runtime, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent, ipc::Channel, window::{ProgressBarState, ProgressBarStatus}};
 use tauri_plugin_updater::{Update, UpdaterExt};
 use regex::Regex;
 use tauri_plugin_dialog::{DialogExt, FilePath};
@@ -47,6 +47,7 @@ struct AppState {
     oculus_download: Mutex<Option<oculus::OculusControl>>,
     launch_in_progress: AtomicBool,
     active_requests: Mutex<HashMap<String, ActiveRequest>>,
+    response_channels: Mutex<HashMap<String, Channel<Value>>>,
     pending_update: tokio::sync::Mutex<Option<PendingUpdate>>,
     update_operation: tokio::sync::Mutex<()>,
     steam_download: Mutex<Option<steam::SteamControl>>,
@@ -123,15 +124,6 @@ impl LogRedactions {
 struct SerializedError {
     message: String,
     code: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct IpcRequest {
-    #[serde(default)]
-    args: Value,
-    #[serde(default)]
-    responce_channel: Option<String>,
 }
 
 fn serialized_error(message: impl Into<String>, code: &str) -> SerializedError {
@@ -283,8 +275,8 @@ fn emit_update_progress<R: Runtime>(
     total: u64,
 ) -> Result<(), SerializedError> {
     if let Some(channel) = response_channel {
-        window.emit(channel, json!({ "current": current, "total": total }))
-            .map_err(|error| serialized_error(error.to_string(), "UPDATE_PROGRESS_FAILED"))?;
+        emit_response_value(window, Some(channel), json!({ "current": current, "total": total }))
+            .map_err(|error| serialized_error(error.message, "UPDATE_PROGRESS_FAILED"))?;
     }
     Ok(())
 }
@@ -487,38 +479,55 @@ fn create_window<R: Runtime>(app: &AppHandle<R>, template: &str, args: Option<Va
 
 fn cancel_window_requests<R: Runtime>(app: &AppHandle<R>, label: &str) {
     let state = app.state::<AppState>();
+    let mut cancelled_ids = Vec::new();
     if let Ok(mut requests) = state.active_requests.lock() {
-        requests.retain(|_, request| {
+        requests.retain(|id, request| {
             if request.window_label == label {
                 request.cancelled.store(true, Ordering::Relaxed);
+                cancelled_ids.push(id.clone());
                 false
             } else {
                 true
             }
         });
     }
+    if let Ok(mut responses) = state.response_channels.lock() {
+        for id in cancelled_ids { responses.remove(&id); }
+    }
 }
 
-fn unwrap_request(value: &Value) -> IpcRequest {
-    serde_json::from_value(value.clone()).unwrap_or(IpcRequest { args: value.clone(), responce_channel: None })
-}
-
-fn ipc_response<R: Runtime>(window: &WebviewWindow<R>, channel: &str, request: &IpcRequest, result: Result<Value, SerializedError>, streamed: bool) {
-    let Some(response_channel) = &request.responce_channel else { return };
+fn ipc_response<R: Runtime>(window: &WebviewWindow<R>, channel: &str, response_id: Option<&str>, result: Result<Value, SerializedError>, streamed: bool) {
+    let Some(response_id) = response_id else { return };
     match result {
         Ok(value) => {
             if !streamed {
-                let _ = window.emit(response_channel, value);
+                let _ = send_response_message(window, response_id, json!({ "kind": "value", "payload": value }));
             }
-            let complete_channel = format!("{response_channel}_complete");
-            let _ = window.emit(&complete_channel, ());
+            let _ = send_response_message(window, response_id, json!({ "kind": "complete" }));
         }
         Err(error) => {
             log::warn!("Windows Tauri route '{channel}' failed: {} ({})", error.message, error.code);
-            let error_channel = format!("{response_channel}_error");
-            let _ = window.emit(&error_channel, error);
+            let _ = send_response_message(window, response_id, json!({ "kind": "error", "payload": error }));
         }
     }
+}
+
+fn send_response_message<R: Runtime>(window: &WebviewWindow<R>, response_id: &str, message: Value) -> Result<(), SerializedError> {
+    let app = window.app_handle();
+    let response = app.state::<AppState>().response_channels.lock()
+        .map_err(|_| serialized_error("IPC response channels are unavailable", "IPC_EMIT_FAILED"))?
+        .get(response_id).cloned();
+    if let Some(response) = response {
+        response.send(message).map_err(|error| serialized_error(error.to_string(), "IPC_EMIT_FAILED"))?;
+    }
+    Ok(())
+}
+
+pub(crate) fn emit_response_value<R: Runtime>(window: &WebviewWindow<R>, response_id: Option<&str>, value: Value) -> Result<(), SerializedError> {
+    if let Some(response_id) = response_id {
+        send_response_message(window, response_id, json!({ "kind": "value", "payload": value }))?;
+    }
+    Ok(())
 }
 
 async fn choose_paths<R: Runtime>(
@@ -1096,61 +1105,94 @@ async fn handle_request<R: Runtime>(
     }
 }
 
-#[tauri::command]
-async fn ipc_send<R: Runtime>(app: AppHandle<R>, window: WebviewWindow<R>, channel: String, args: Option<Value>) {
-    if !is_application_window(window.label()) {
-        log::warn!("Rejected IPC route '{channel}' from window '{}'", window.label());
-        return;
-    }
-    if let Some(response_id) = channel.strip_suffix("_teardown") {
-        let state = app.state::<AppState>();
-        if let Ok(mut requests) = state.active_requests.lock() {
-            if requests.get(response_id).is_some_and(|request| request.window_label == window.label()) {
-                if let Some(request) = requests.remove(response_id) {
-                    request.cancelled.store(true, Ordering::Relaxed);
-                }
-            } else if requests.contains_key(response_id) {
-                log::warn!("Rejected request cancellation from non-originating window '{}'", window.label());
-            }
-        }
-        return;
-    }
-    let request = unwrap_request(&args.unwrap_or(Value::Null));
-    let has_response = request.responce_channel.is_some();
-    let request_args = request.args.clone();
-    let cancelled = Arc::new(AtomicBool::new(false));
-    if let Some(response_id) = &request.responce_channel {
-        let state = app.state::<AppState>();
-        if let Ok(mut requests) = state.active_requests.lock() {
-            requests.insert(response_id.clone(), ActiveRequest {
-                window_label: window.label().to_owned(),
-                cancelled: cancelled.clone(),
-            });
-        }
-    }
+async fn run_ipc_route<R: Runtime>(
+    app: &AppHandle<R>,
+    window: &WebviewWindow<R>,
+    channel: String,
+    args: Value,
+    response_id: Option<String>,
+    cancelled: Arc<AtomicBool>,
+) {
     let result = handle_request(
-        &app,
-        &window,
+        app,
+        window,
         &channel,
-        request_args,
-        request.responce_channel.as_deref(),
+        args,
+        response_id.as_deref(),
         cancelled,
     ).await;
-    if let Some(response_id) = &request.responce_channel {
-        let state = app.state::<AppState>();
-        if let Ok(mut requests) = state.active_requests.lock() {
-            requests.remove(response_id);
-        }
-    }
-    if !has_response {
-        if let Err(error) = result {
+    let should_restart = channel == "restart-app" && result.is_ok();
+    if response_id.is_none() {
+        if let Err(error) = &result {
             log::warn!("Windows Tauri one-way route '{channel}' failed: {}", error.message);
         }
-    } else {
-        let should_restart = channel == "restart-app" && result.is_ok();
-        ipc_response(&window, &channel, &request, result, matches!(channel.as_str(), "import-version" | "download-bs-version" | "auto-download-bs-version" | "download-bs-version-qr" | "bs-oculus-download" | "bs-launch.launch" | "download-model" | "get-version-models" | "export-models" | "delete-models" | "load-version-maps" | "delete-maps" | "export-maps" | "bs-maps.import-maps" | "get-version-playlists-details" | "import-playlists" | "delete-playlist" | "export-playlists" | "download-playlist" | "one-click-install-playlist" | "bs-mods.import-mods" | "bs-mods.install-mods" | "bs-mods.uninstall-mods" | "bs-mods.uninstall-all-mods" | "download-update" | "last-downloaded-map"));
-        if should_restart { app.request_restart(); }
     }
+    ipc_response(&window, &channel, response_id.as_deref(), result, matches!(channel.as_str(), "import-version" | "download-bs-version" | "auto-download-bs-version" | "download-bs-version-qr" | "bs-oculus-download" | "bs-launch.launch" | "download-model" | "get-version-models" | "export-models" | "delete-models" | "load-version-maps" | "delete-maps" | "export-maps" | "bs-maps.import-maps" | "get-version-playlists-details" | "import-playlists" | "delete-playlist" | "export-playlists" | "download-playlist" | "one-click-install-playlist" | "bs-mods.import-mods" | "bs-mods.install-mods" | "bs-mods.uninstall-mods" | "bs-mods.uninstall-all-mods" | "download-update" | "last-downloaded-map"));
+    if should_restart { app.request_restart(); }
+}
+
+#[tauri::command]
+async fn request<R: Runtime>(
+    app: AppHandle<R>,
+    window: WebviewWindow<R>,
+    request_id: String,
+    channel: String,
+    args: Option<Value>,
+    on_event: Channel<Value>,
+) -> Result<(), String> {
+    if !is_application_window(window.label()) {
+        return Err(format!("Rejected IPC route from window '{}'", window.label()));
+    }
+    if request_id.trim().is_empty() || request_id.len() > 128 {
+        return Err("Invalid request identifier".to_owned());
+    }
+
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let state = app.state::<AppState>();
+    {
+        let mut requests = state.active_requests.lock().map_err(|_| "Active requests are unavailable".to_owned())?;
+        if requests.contains_key(&request_id) {
+            return Err("Request identifier is already active".to_owned());
+        }
+        let mut responses = state.response_channels.lock().map_err(|_| "IPC response channels are unavailable".to_owned())?;
+        if responses.contains_key(&request_id) {
+            return Err("Request identifier is already active".to_owned());
+        }
+        requests.insert(request_id.clone(), ActiveRequest {
+            window_label: window.label().to_owned(),
+            cancelled: cancelled.clone(),
+        });
+        responses.insert(request_id.clone(), on_event);
+    }
+
+    run_ipc_route(&app, &window, channel, args.unwrap_or(Value::Null), Some(request_id.clone()), cancelled).await;
+
+    if let Ok(mut requests) = state.active_requests.lock() { requests.remove(&request_id); }
+    if let Ok(mut responses) = state.response_channels.lock() { responses.remove(&request_id); }
+    Ok(())
+}
+
+#[tauri::command]
+async fn send_lazy<R: Runtime>(app: AppHandle<R>, window: WebviewWindow<R>, channel: String, args: Option<Value>) {
+    if !is_application_window(window.label()) {
+        log::warn!("Rejected one-way IPC route '{channel}' from window '{}'", window.label());
+        return;
+    }
+    run_ipc_route(&app, &window, channel, args.unwrap_or(Value::Null), None, Arc::new(AtomicBool::new(false))).await;
+}
+
+#[tauri::command]
+fn cancel_request<R: Runtime>(app: AppHandle<R>, window: WebviewWindow<R>, request_id: String) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let mut requests = state.active_requests.lock().map_err(|_| "Active requests are unavailable".to_owned())?;
+    if requests.get(&request_id).is_some_and(|request| request.window_label == window.label()) {
+        if let Some(request) = requests.remove(&request_id) { request.cancelled.store(true, Ordering::Relaxed); }
+        drop(requests);
+        state.response_channels.lock().map_err(|_| "IPC response channels are unavailable".to_owned())?.remove(&request_id);
+    } else if requests.contains_key(&request_id) {
+        return Err("Request cancellation came from a different window".to_owned());
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -1409,7 +1451,7 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_window_state::Builder::default().build())
-        .invoke_handler(tauri::generate_handler![ipc_send, register_protocol])
+        .invoke_handler(tauri::generate_handler![request, send_lazy, cancel_request, register_protocol])
         .setup(|app| {
             if let Err(error) = proxy::configure(app.handle()) {
                 log::warn!("Could not read the system proxy setting: {error}");

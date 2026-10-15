@@ -12,7 +12,7 @@ use reqwest::{Client, StatusCode};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use tauri::{AppHandle, Emitter, Manager, Runtime, WebviewWindow};
+use tauri::{AppHandle, Manager, Runtime, WebviewWindow};
 use tokio::{io::{AsyncReadExt, AsyncWriteExt}, time::sleep};
 use zip::ZipArchive;
 
@@ -502,8 +502,7 @@ fn emit_progress<R: Runtime>(
     version: &Value,
 ) -> Result<(), SerializedError> {
     if let Some(channel) = response_channel {
-        window.emit(channel, json!({ "current": current, "total": total, "data": version }))
-            .map_err(|error| serialized_error(error.to_string(), "IPC_EMIT_FAILED"))?;
+        crate::emit_response_value(window, Some(channel), json!({ "current": current, "total": total, "data": version }))?;
     }
     Ok(())
 }

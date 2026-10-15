@@ -1,7 +1,7 @@
 use std::{collections::HashSet, fs, io, path::{Component, Path, PathBuf}, sync::{Arc, atomic::{AtomicBool, Ordering}}};
 
 use serde_json::{Map, Value, json};
-use tauri::{AppHandle, Emitter, Runtime, WebviewWindow};
+use tauri::{AppHandle, Runtime, WebviewWindow};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use uuid::Uuid;
 
@@ -216,8 +216,7 @@ fn emit_import_progress<R: Runtime>(
     version: &Value,
 ) -> Result<(), SerializedError> {
     if let Some(channel) = response_channel {
-        window.emit(channel, json!({ "current": current, "total": total, "data": version }))
-            .map_err(|error| serialized_error(error.to_string(), "IPC_EMIT_FAILED"))?;
+        crate::emit_response_value(window, Some(channel), json!({ "current": current, "total": total, "data": version }))?;
     }
     Ok(())
 }

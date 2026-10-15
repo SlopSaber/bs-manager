@@ -7,7 +7,7 @@ use std::{
 };
 
 use serde_json::{Value, json};
-use tauri::{AppHandle, Emitter, Runtime, WebviewWindow};
+use tauri::{AppHandle, Runtime, WebviewWindow};
 use std::time::Duration;
 use url::Url;
 use zip::{CompressionMethod, write::{SimpleFileOptions, ZipWriter}};
@@ -554,8 +554,7 @@ fn write_playlist_archive(
 
 fn emit_list_progress<R: Runtime>(window: &WebviewWindow<R>, channel: Option<&str>, current: u64, total: u64, data: Value) -> Result<(), SerializedError> {
     if let Some(channel) = channel {
-        window.emit(channel, json!({ "current": current, "total": total, "data": data }))
-            .map_err(|error| serialized_error(error.to_string(), "IPC_EMIT_FAILED"))?;
+        crate::emit_response_value(window, Some(channel), json!({ "current": current, "total": total, "data": data }))?;
     }
     Ok(())
 }
@@ -567,31 +566,28 @@ fn emit_import_progress<R: Runtime>(window: &WebviewWindow<R>, channel: Option<&
             if let Some(data) = data { object.insert("data".into(), data); }
             if let Some(last_error) = last_error { object.insert("lastError".into(), last_error); }
         }
-        window.emit(channel, value).map_err(|error| serialized_error(error.to_string(), "IPC_EMIT_FAILED"))?;
+        crate::emit_response_value(window, Some(channel), value)?;
     }
     Ok(())
 }
 
 fn emit_delete_progress<R: Runtime>(window: &WebviewWindow<R>, channel: Option<&str>, current: u64, total: u64) -> Result<(), SerializedError> {
     if let Some(channel) = channel {
-        window.emit(channel, json!({ "current": current, "total": total }))
-            .map_err(|error| serialized_error(error.to_string(), "IPC_EMIT_FAILED"))?;
+        crate::emit_response_value(window, Some(channel), json!({ "current": current, "total": total }))?;
     }
     Ok(())
 }
 
 fn emit_archive_progress<R: Runtime>(window: &WebviewWindow<R>, channel: Option<&str>, current: u64, total: u64, output: &str) -> Result<(), SerializedError> {
     if let Some(channel) = channel {
-        window.emit(channel, json!({ "current": current, "total": total, "data": output }))
-            .map_err(|error| serialized_error(error.to_string(), "IPC_EMIT_FAILED"))?;
+        crate::emit_response_value(window, Some(channel), json!({ "current": current, "total": total, "data": output }))?;
     }
     Ok(())
 }
 
 fn emit_download_progress<R: Runtime>(window: &WebviewWindow<R>, channel: Option<&str>, current: u64, total: u64, data: Value) -> Result<(), SerializedError> {
     if let Some(channel) = channel {
-        window.emit(channel, json!({ "current": current, "total": total, "data": data }))
-            .map_err(|error| serialized_error(error.to_string(), "IPC_EMIT_FAILED"))?;
+        crate::emit_response_value(window, Some(channel), json!({ "current": current, "total": total, "data": data }))?;
     }
     Ok(())
 }

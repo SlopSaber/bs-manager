@@ -17,8 +17,8 @@ Signed remote updates are opt-in at compile time. Preview reads `BSM_TAURI_PREVI
 
 Current local installers compile successfully under Node 24.21.0 and are unsigned. All profiles keep Tauri's configured window list empty so startup can choose a target before creating any window: a supported protocol URL or `.bplist` opens its corresponding window without first creating the main window; otherwise the `auto-update` setting selects the launcher when a signed update source is configured, falling back to the main window when updates are disabled or unavailable. The generated NSIS script contains both preinstall and preuninstall hook call sites. The hook code was included in the installer builds, but neither installer has been executed; migration, registry restoration, and uninstall behavior still need user-led review:
 
-- Preview: `release/tauri/preview/BSManager-Preview-1.6.0-x64-setup.exe`, SHA-256 `2418d9bcc61b8315880c2d2bd4e0a9de034f7f938cb14b8168b4efe4c06c783f`.
-- Replacement: `release/tauri/replacement/BSManager-1.6.0-x64-setup.exe`, SHA-256 `18bbf922cd773dea85860ffc2ae3dd8fcfe95f4fa69847797cdc35c31ca723c9`.
+- Preview: `release/tauri/preview/BSManager-Preview-1.6.0-x64-setup.exe`, SHA-256 `f5c1d85282877d446307715d0060df4ee1d810e4724c2dd95f2579097492b336`.
+- Replacement: `release/tauri/replacement/BSManager-1.6.0-x64-setup.exe`, SHA-256 `2bb1a839819f8acea2f0c8fd9809758e209516574ee59f51f420f16e3b0c83fb`.
 
 ## Implemented in the Rust host
 
@@ -32,7 +32,7 @@ Current local installers compile successfully under Node 24.21.0 and are unsigne
 - BeatMods availability and health routes; installed-mod discovery, including library files matched to manifests, DLL/ZIP import, download and content-hash validation, installation, removal, and remove-all. Archive member paths reject traversal and symbolic links. IPA execution and network cancellation still need runtime review.
 - Tauri updater checks use profile-specific endpoint/public-key build settings. Downloads stream progress to the requesting window, support request cancellation, verify signatures before installation, and install through the Tauri Windows updater. Updates stay disabled when signed profile settings are absent. Taskbar progress follows renderer progress on the originating window.
 - Tauri logs use info level and redact registered secret strings plus Oculus token patterns before writing to any target. Renderer `add-filter-string` and `add-filter-pattern` routes update the shared formatter filters.
-- Static configuration commands preserve unrecognized fields during file round trips. The system-proxy setting disables OS proxy use by default and applies Windows proxy settings to newly created Rust HTTP clients when enabled, including after a settings change. Request streaming and cancellation are bound to the originating window; window destruction cancels that window's outstanding requests, and teardown from another window is rejected.
+- Static configuration commands preserve unrecognized fields during file round trips. The system-proxy setting disables OS proxy use by default and applies Windows proxy settings to newly created Rust HTTP clients when enabled, including after a settings change. Tauri Channels carry ordered request streams; `cancel_request` and window destruction cancel work belonging to that window, and cancellation from another window is rejected.
 
 These routes compile. Their runtime behavior has not yet passed the user-led acceptance scenarios.
 

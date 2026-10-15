@@ -10,7 +10,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use tauri::{AppHandle, Emitter, Manager, Runtime, WebviewWindow, path::BaseDirectory};
+use tauri::{AppHandle, Manager, Runtime, WebviewWindow, path::BaseDirectory};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     process::{ChildStdin, Command},
@@ -169,7 +169,7 @@ pub async fn download<R: Runtime>(
     }
     if let Some(channel) = response_channel {
         let start_event = json!({ "type": "Info", "subType": "Start", "data": serde_json::to_string(&version).unwrap_or_default() });
-        if window.emit(channel, start_event).is_err() {
+        if crate::emit_response_value(window, Some(channel), start_event).is_err() {
             cancelled.store(true, Ordering::Relaxed);
             let _ = commands.send(SteamCommand::Cancel);
         }
@@ -279,8 +279,7 @@ pub async fn download<R: Runtime>(
     fs::write(&metadata_path, serde_json::to_vec_pretty(&metadata).unwrap_or_default())
         .map_err(|error| serialized_error(error.to_string(), "VERSION_METADATA_WRITE_FAILED"))?;
     if let Some(response_channel) = response_channel {
-        window.emit(response_channel, finished)
-            .map_err(|error| serialized_error(error.to_string(), "IPC_EMIT_FAILED"))?;
+        crate::emit_response_value(window, Some(response_channel), finished)?;
     }
     Ok(Value::Null)
 }
@@ -353,8 +352,7 @@ async fn handle_event<R: Runtime>(
             if event.kind == "Info" && event.sub_type == "Finished" {
                 *finished_event = Some(value);
             } else if let Some(channel) = response_channel {
-                window.emit(channel, value)
-                    .map_err(|error| serialized_error(error.to_string(), "IPC_EMIT_FAILED"))?;
+                crate::emit_response_value(window, Some(channel), value)?;
             }
             Ok(())
         }
