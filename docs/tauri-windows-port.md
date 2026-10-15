@@ -15,10 +15,10 @@ Each command builds the locked Rust helpers, type-checks the Tauri renderer cont
 
 Signed remote updates are opt-in at compile time. Preview reads `BSM_TAURI_PREVIEW_UPDATE_ENDPOINT` and `BSM_TAURI_PREVIEW_UPDATE_PUBLIC_KEY`; replacement reads `BSM_TAURI_REPLACEMENT_UPDATE_ENDPOINT` and `BSM_TAURI_REPLACEMENT_UPDATE_PUBLIC_KEY`. Set both values for a profile before its build. Endpoint must use HTTPS and return Tauri updater metadata for that profile's channel. Tauri verifies downloaded package signatures before installation. With either value absent, that profile reports no updates and keeps remote updates disabled. Do not reuse Electron update feeds.
 
-Current local installers compile successfully and are unsigned. Startup chooses a target window before creating it: a supported protocol URL or `.bplist` opens its corresponding window without first creating the main window; otherwise the `auto-update` setting selects the launcher when a signed update source is configured, falling back to the main window when updates are disabled or unavailable. The generated NSIS script contains both preinstall and preuninstall hook call sites. The hook code was included in the installer builds, but neither installer has been executed; migration, registry restoration, and uninstall behavior still need user-led review:
+Current local installers compile successfully and are unsigned. All profiles keep Tauri's configured window list empty so startup can choose a target before creating any window: a supported protocol URL or `.bplist` opens its corresponding window without first creating the main window; otherwise the `auto-update` setting selects the launcher when a signed update source is configured, falling back to the main window when updates are disabled or unavailable. The generated NSIS script contains both preinstall and preuninstall hook call sites. The hook code was included in the installer builds, but neither installer has been executed; migration, registry restoration, and uninstall behavior still need user-led review:
 
-- Preview: `release/tauri/preview/BSManager-Preview-1.6.0-x64-setup.exe`, SHA-256 `5971885e48989757273ca8181c397222c159c847e736efb96073067d74f24eb7`.
-- Replacement: `release/tauri/replacement/BSManager-1.6.0-x64-setup.exe`, SHA-256 `9d6d2e493a7bf091ce2a46407f802638157ad607e31ce6d3023c07afab3e96ed`.
+- Preview: `release/tauri/preview/BSManager-Preview-1.6.0-x64-setup.exe`, SHA-256 `3ecd24453884b599d36ebfe6b75b232859d62ce098f015f3b1f4879f02adea60`.
+- Replacement: `release/tauri/replacement/BSManager-1.6.0-x64-setup.exe`, SHA-256 `9046f5a0aa3023acafc86c84e76b9405e7a82463962521dbeac06b732ce82eda`.
 
 ## Implemented in the Rust host
 

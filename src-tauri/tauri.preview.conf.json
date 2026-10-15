@@ -2,21 +2,6 @@
     "productName": "BSManager Preview",
     "identifier": "io.bsmanager.bsmanager.preview",
     "app": {
-        "windows": [
-            {
-                "label": "main",
-                "title": "BSManager Preview",
-                "url": "index.html",
-                "width": 1080,
-                "height": 720,
-                "minWidth": 900,
-                "minHeight": 500,
-                "center": true,
-                "resizable": true,
-                "decorations": false,
-                "visible": true,
-                "dragDropEnabled": true
-            }
-        ]
+        "windows": []
     }
 }
