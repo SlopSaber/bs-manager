@@ -15,8 +15,8 @@ Each command type-checks the Tauri renderer contracts, builds all six HTML entry
 
 Current local installers compile successfully and are unsigned. The generated NSIS script contains both preinstall and preuninstall hook call sites. The hook code was included in the installer builds, but neither installer has been executed; migration, registry restoration, and uninstall behavior still need user-led review:
 
-- Preview: `release/tauri/preview/BSManager-Preview-1.6.0-x64-setup.exe`, SHA-256 `30b3906206d5a17ecd06ef2b56b4a9fa9c07967cd7246b6c9c66154021c3411c`.
-- Replacement: `release/tauri/replacement/BSManager-1.6.0-x64-setup.exe`, SHA-256 `82a18b972f43877c61859c972647daf5a597cf40c1760d8244e332b956864a02`.
+- Preview: `release/tauri/preview/BSManager-Preview-1.6.0-x64-setup.exe`, SHA-256 `dba98317635b66d47978159ee47216be7506df20f1172a76fecf8e80654ebf84`.
+- Replacement: `release/tauri/replacement/BSManager-1.6.0-x64-setup.exe`, SHA-256 `831fb281c3b819d4d84283d6a474dc87fe7ffd98d4e0085dc92122f3d2844918`.
 
 ## Implemented in the Rust host
 
@@ -30,7 +30,7 @@ Current local installers compile successfully and are unsigned. The generated NS
 - BeatMods availability and health routes; installed-mod discovery, including library files matched to manifests, DLL/ZIP import, download and content-hash validation, installation, removal, and remove-all. Archive member paths reject traversal and symbolic links. IPA execution and network cancellation still need runtime review.
 - Update checks report no update. Download/install routes return `UPDATES_DISABLED` until a signed Tauri update endpoint is configured. Taskbar progress follows renderer progress on the originating window.
 - Tauri logs use info level and redact registered secret strings plus Oculus token patterns before writing to any target. Renderer `add-filter-string` and `add-filter-pattern` routes update the shared formatter filters.
-- Static configuration commands preserve unrecognized fields during file round trips. Request streaming and cancellation are bound to the originating window.
+- Static configuration commands preserve unrecognized fields during file round trips. The system-proxy setting disables OS proxy use by default and applies Windows proxy settings to newly created Rust HTTP clients when enabled, including after a settings change. Request streaming and cancellation are bound to the originating window.
 
 These routes compile. Their runtime behavior has not yet passed the user-led acceptance scenarios.
 
@@ -39,7 +39,7 @@ These routes compile. Their runtime behavior has not yet passed the user-led acc
 - All shared Windows IPC route names are registered; the only shared routes absent from Rust are Linux-specific. Deep-link delivery and some configuration or library behavior still need implementation or parity review. See `src/shared/models/ipc/ipc-routes.ts` and `src/main/ipcs` for the source inventory.
 - Verify six-window behavior and window-specific capabilities. The shared renderer entry pages exist, but the auxiliary window lifecycle and remote authentication/webview isolation need acceptance review.
 - First-run preview import copies legacy settings into preview storage and reuses imported library paths without copying game installations. Verify this flow and replacement install failure recovery in user-led review. If Electron uninstall succeeds and later Tauri installation fails, reinstall Electron manually and restore any needed registry backups. Replacement is not ready to replace an installed Electron build.
-- Complete Meta and Steam credential migration, download resume/error paths, map and playlist cache parity, mod dependency and IPA behavior, content sharing, archive interruption recovery, relocation, proxy behavior, and signed update endpoint configuration. LIV registry sync, launch ownership, and close-on-launch still need user-led runtime review.
+- Verify Meta and Steam login, DPAPI-backed remembered sessions, and re-login when legacy credentials cannot be imported. Review download resume/error paths, map and playlist cache parity, mod dependency and IPA behavior, content sharing, archive interruption recovery, relocation, the system-proxy toggle, LIV registry sync, launch ownership, and close-on-launch. Remote updates stay disabled until a signed Tauri endpoint and key are supplied.
 - Complete visual comparison at 100%, 125%, and 150% display scaling, in light and dark themes, with custom colors and default, minimum, and maximized window sizes. Build success does not establish visual or functional parity.
 
 ## Replacement rollback

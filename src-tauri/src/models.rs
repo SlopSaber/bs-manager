@@ -8,7 +8,6 @@ use std::{
 };
 
 use futures_util::StreamExt;
-use reqwest::Client;
 use serde_json::{Value, json};
 use tauri::{AppHandle, Emitter, Manager, Runtime, WebviewWindow};
 use tokio::io::AsyncWriteExt;
@@ -297,7 +296,7 @@ async fn download_model_file<R: Runtime>(
         return Err(serialized_error("Model download was cancelled", "REQUEST_CANCELLED"));
     }
 
-    let client = Client::builder()
+    let client = crate::proxy::client_builder()
         .connect_timeout(Duration::from_secs(20))
         .timeout(Duration::from_secs(1800))
         .redirect(reqwest::redirect::Policy::custom(|attempt| {
@@ -544,7 +543,7 @@ pub async fn get_model_by_id(id: &Value) -> Value {
 }
 
 async fn query_models(query: &Value) -> Result<Value, SerializedError> {
-    let client = Client::builder()
+    let client = crate::proxy::client_builder()
         .connect_timeout(Duration::from_secs(15))
         .timeout(Duration::from_secs(45))
         .user_agent("BSManager/1.6.0")

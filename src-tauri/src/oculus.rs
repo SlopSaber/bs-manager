@@ -173,7 +173,7 @@ async fn download_inner<R: Runtime>(
     tokio::fs::write(&metadata_path, serde_json::to_vec_pretty(&metadata).unwrap_or_default()).await
         .map_err(|error| serialized_error(error.to_string(), "VERSION_METADATA_WRITE_FAILED"))?;
 
-    let client = Client::builder()
+    let client = crate::proxy::client_builder()
         .connect_timeout(Duration::from_secs(20))
         .timeout(Duration::from_secs(180))
         .user_agent("BSManager/1.6.0")

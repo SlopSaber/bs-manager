@@ -8,7 +8,6 @@ use std::{
 };
 
 use futures_util::StreamExt;
-use reqwest::Client;
 use serde_json::{Value, json};
 use tauri::{AppHandle, Emitter, Runtime, WebviewWindow};
 use tokio::{io::AsyncReadExt, process::Command, time::timeout};
@@ -277,7 +276,7 @@ async fn download_verified_mod(version: &Value, cancelled: &AtomicBool) -> Resul
     let zip_hash = version.get("zipHash").and_then(Value::as_str)
         .ok_or_else(|| serialized_error("Mod archive hash is missing", "INVALID_MOD"))?;
     let url = format!("{BEATMODS}/cdn/mod/{}.zip", urlencoding::encode(zip_hash));
-    let client = Client::builder().connect_timeout(Duration::from_secs(20)).timeout(Duration::from_secs(180))
+    let client = crate::proxy::client_builder().connect_timeout(Duration::from_secs(20)).timeout(Duration::from_secs(180))
         .user_agent(format!("BSManager/{}", env!("CARGO_PKG_VERSION"))).build()
         .map_err(|error| serialized_error(error.to_string(), "MOD_DOWNLOAD_FAILED"))?;
     let response = client.get(url).send().await
@@ -522,7 +521,7 @@ fn update_hash_cache(versions: impl IntoIterator<Item = Value>) {
 }
 
 async fn get_json(url: reqwest::Url) -> Result<Value, SerializedError> {
-    let response = Client::builder().connect_timeout(Duration::from_secs(20)).timeout(Duration::from_secs(30))
+    let response = crate::proxy::client_builder().connect_timeout(Duration::from_secs(20)).timeout(Duration::from_secs(30))
         .user_agent(format!("BSManager/{}", env!("CARGO_PKG_VERSION"))).build()
         .map_err(|error| serialized_error(error.to_string(), "BEATMODS_REQUEST_FAILED"))?
         .get(url).send().await.and_then(reqwest::Response::error_for_status)

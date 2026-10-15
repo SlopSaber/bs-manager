@@ -7,7 +7,7 @@ use std::{
 
 use flate2::read::GzDecoder;
 use prost::{Enumeration, Message};
-use reqwest::{Client, header::{ETAG, IF_NONE_MATCH}};
+use reqwest::header::{ETAG, IF_NONE_MATCH};
 use serde_json::{Value, json};
 use tauri::{AppHandle, Runtime};
 use tokio::sync::OnceCell;
@@ -18,7 +18,6 @@ const SOURCES: [&str; 2] = [
 ];
 const ETAG_KEY: &str = "song-details-cache-etag";
 
-static CLIENT: OnceLock<Client> = OnceLock::new();
 static INITIALIZED: OnceCell<()> = OnceCell::const_new();
 static CACHE: OnceLock<Mutex<CacheIndex>> = OnceLock::new();
 
@@ -250,10 +249,10 @@ async fn initialize_inner<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> 
 }
 
 async fn refresh_cache<R: Runtime>(app: &AppHandle<R>, path: &PathBuf, etag: Option<&str>) -> Result<(), String> {
-    let client = CLIENT.get_or_init(|| Client::builder()
+    let client = crate::proxy::client_builder()
         .connect_timeout(std::time::Duration::from_secs(20))
         .timeout(std::time::Duration::from_secs(120))
-        .build().expect("valid song cache HTTP client"));
+        .build().map_err(|error| error.to_string())?;
     let mut last_error = None;
 
     for source in SOURCES {

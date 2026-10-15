@@ -7,7 +7,6 @@ use std::{
 };
 
 use serde_json::{Value, json};
-use reqwest::Client;
 use tauri::{AppHandle, Emitter, Runtime, WebviewWindow};
 use std::time::Duration;
 use url::Url;
@@ -331,7 +330,7 @@ async fn read_playlist_source(source: &str) -> Result<(Value, String), Serialize
     if !matches!(url.scheme(), "http" | "https") {
         return Err(serialized_error("Playlist URLs must use HTTP or HTTPS", "INVALID_SOURCE"));
     }
-    let response = Client::builder().connect_timeout(Duration::from_secs(20)).timeout(Duration::from_secs(60))
+    let response = crate::proxy::client_builder().connect_timeout(Duration::from_secs(20)).timeout(Duration::from_secs(60))
         .user_agent(format!("BSManager/{}", env!("CARGO_PKG_VERSION"))).build()
         .map_err(|error| serialized_error(error.to_string(), "PLAYLIST_DOWNLOAD_FAILED"))?
         .get(url).send().await.and_then(reqwest::Response::error_for_status)

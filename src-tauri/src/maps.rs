@@ -8,7 +8,6 @@ use std::{
 
 use chrono::Local;
 use futures_util::StreamExt;
-use reqwest::Client;
 use serde_json::{Map, Value, json};
 use sha1::{Digest, Sha1};
 use tauri::{AppHandle, Emitter, Runtime, WebviewWindow};
@@ -496,7 +495,7 @@ async fn download_and_install_map<R: Runtime>(
 }
 
 async fn download_map_archive(url: &Url, destination: &Path, cancelled: &AtomicBool) -> Result<(), SerializedError> {
-    let response = Client::builder().connect_timeout(Duration::from_secs(20)).timeout(Duration::from_secs(1800))
+    let response = crate::proxy::client_builder().connect_timeout(Duration::from_secs(20)).timeout(Duration::from_secs(1800))
         .redirect(reqwest::redirect::Policy::custom(|attempt| {
             if attempt.previous().len() >= 10 || attempt.url().scheme() != "https" { attempt.stop() } else { attempt.follow() }
         }))

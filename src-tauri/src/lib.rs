@@ -26,6 +26,7 @@ mod maps;
 mod playlists;
 mod mods;
 mod protocols;
+mod proxy;
 mod map_info_cache;
 mod song_cache;
 
@@ -183,7 +184,9 @@ fn import_legacy_settings<R: Runtime>(app: &AppHandle<R>, import: bool) -> Resul
         settings.extend(preview_settings);
     }
     settings.insert(PREVIEW_IMPORT_MARKER.to_owned(), json!(if import { "imported" } else { "skipped" }));
-    write_settings(app, &settings)
+    write_settings(app, &settings)?;
+    proxy::set_enabled(settings.get("use-system-proxy").and_then(Value::as_bool).unwrap_or(false));
+    Ok(())
 }
 
 fn read_settings<R: Runtime>(app: &AppHandle<R>) -> Result<Map<String, Value>, String> {
@@ -627,9 +630,11 @@ async fn handle_request<R: Runtime>(
         "static-configuration.set" => {
             let key = args.get("key").and_then(Value::as_str).ok_or_else(|| serialized_error("Setting key is required", "INVALID_SETTING"))?;
             let value = args.get("value").cloned().unwrap_or(Value::Null);
+            let use_system_proxy = value.as_bool().unwrap_or(false);
             let mut settings = read_settings(app).map_err(|error| serialized_error(error, "SETTINGS_READ_FAILED"))?;
             settings.insert(key.to_owned(), value);
             write_settings(app, &settings).map_err(|error| serialized_error(error, "SETTINGS_WRITE_FAILED"))?;
+            if key == "use-system-proxy" { proxy::set_enabled(use_system_proxy); }
             Ok(Value::Null)
         }
         "static-configuration.delete" => {
@@ -637,6 +642,7 @@ async fn handle_request<R: Runtime>(
             let mut settings = read_settings(app).map_err(|error| serialized_error(error, "SETTINGS_READ_FAILED"))?;
             settings.remove(key);
             write_settings(app, &settings).map_err(|error| serialized_error(error, "SETTINGS_WRITE_FAILED"))?;
+            if key == "use-system-proxy" { proxy::set_enabled(false); }
             Ok(Value::Null)
         }
         "bs-version.get-version-dict" => serde_json::from_str(VERSION_LIBRARY).map_err(|error| serialized_error(error.to_string(), "VERSION_LIBRARY_READ_FAILED")),
@@ -1086,6 +1092,9 @@ pub fn run() {
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .invoke_handler(tauri::generate_handler![ipc_send, register_protocol])
         .setup(|app| {
+            if let Err(error) = proxy::configure(app.handle()) {
+                log::warn!("Could not read the system proxy setting: {error}");
+            }
             let launch_protocol = shortcuts::launch_protocol(app.handle());
             match protocols::is_registered(app.handle(), launch_protocol) {
                 Ok(true) => {}

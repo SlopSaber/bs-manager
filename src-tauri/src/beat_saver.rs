@@ -1,13 +1,11 @@
 use std::sync::{Mutex, OnceLock};
 
-use reqwest::Client;
 use serde_json::{Value, json};
 use url::Url;
 
 use crate::{SerializedError, serialized_error};
 
 const API_BASE: &str = "https://api.beatsaver.com";
-static CLIENT: OnceLock<Client> = OnceLock::new();
 static MAP_CACHE: OnceLock<Mutex<std::collections::HashMap<String, Value>>> = OnceLock::new();
 
 pub async fn dispatch(channel: &str, args: &Value) -> Result<Value, SerializedError> {
@@ -270,7 +268,9 @@ async fn get_playlist_details_by_id(args: &Value) -> Result<Value, SerializedErr
 }
 
 async fn get_json(url: Url) -> Result<Value, SerializedError> {
-    let response = CLIENT.get_or_init(Client::new)
+    let client = crate::proxy::client_builder().build()
+        .map_err(|error| serialized_error(error.to_string(), "BEATSAVER_REQUEST_FAILED"))?;
+    let response = client
         .get(url)
         .header(reqwest::header::USER_AGENT, format!("BSManager/{}", env!("CARGO_PKG_VERSION")))
         .timeout(std::time::Duration::from_secs(15))
