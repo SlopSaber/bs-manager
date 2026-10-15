@@ -36,9 +36,18 @@ Current local installers compile successfully and are unsigned. The generated NS
 
 These routes compile. Their runtime behavior has not yet passed the user-led acceptance scenarios.
 
+## Windows parity checklist
+
+- [x] Renderer contract type-check and production build include all six entry pages: main, update launcher, shortcut launcher, and map, playlist, and model one-click windows.
+- [x] Source inventory maps every non-Linux route in `src/shared/models/ipc/ipc-routes.ts` to the Rust dispatcher or a delegated Rust handler. Linux Proton routes remain outside this Windows rewrite.
+- [x] Preview and replacement x64 NSIS profiles compile and emit local installer artifacts.
+- [ ] Exercise every route's result, progress, error, cancellation, and event behavior in the Windows app.
+- [ ] Review every settings control, dialog, window lifecycle, file-drop target, deep link, shortcut, and library operation against the Electron baseline.
+- [ ] Complete installer migration/recovery checks and 100%, 125%, and 150% visual comparisons across themes and window sizes.
+
 ## Remaining parity work
 
-- All shared Windows IPC route names are registered; the only shared routes absent from Rust are Linux-specific. Deep-link delivery and some configuration or library behavior still need implementation or parity review. See `src/shared/models/ipc/ipc-routes.ts` and `src/main/ipcs` for the source inventory.
+- Deep-link delivery and some settings/library behavior still need implementation or parity review. See `src/shared/models/ipc/ipc-routes.ts` and `src/main/ipcs` for the source inventory.
 - Verify six-window behavior and window-specific capabilities. The shared renderer entry pages exist, but the auxiliary window lifecycle and remote authentication/webview isolation need acceptance review.
 - First-run preview import copies legacy settings into preview storage and reuses imported library paths without copying game installations. Verify this flow and replacement install failure recovery in user-led review. Preview process detection and mutation blocking also need acceptance review. If Electron uninstall succeeds and later Tauri installation fails, reinstall Electron manually and restore any needed registry backups. Replacement is not ready to replace an installed Electron build.
 - Verify Meta and Steam login, DPAPI-backed remembered sessions, and re-login when legacy credentials cannot be imported. Review download resume/error paths, map and playlist cache parity, mod dependency and IPA behavior, content sharing, archive interruption recovery, relocation, the system-proxy toggle, LIV registry sync, launch ownership, close-on-launch, and each configured signed updater channel. Remote updates stay disabled in current local artifacts because no endpoint/key pair was supplied.
