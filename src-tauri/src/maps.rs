@@ -382,7 +382,7 @@ pub async fn one_click_install_map<R: Runtime>(
             let real_root = fs::canonicalize(&root).map_err(|error| serialized_error(error.to_string(), "MAP_FOLDER_FAILED"))?;
             if real_root == source_parent { continue; }
             let destination = real_root.join(source.file_name().unwrap_or_default());
-            copy_map_directory(&source, &destination)?;
+            copy_map_directory_cancellable(&source, &destination, &cancelled)?;
         }
         Ok(())
     }).await.map_err(|error| serialized_error(error.to_string(), "MAP_COPY_FAILED"))??;
@@ -733,37 +733,97 @@ fn emit_archive_progress<R: Runtime>(
 }
 
 fn copy_map_directory(source: &Path, destination: &Path) -> Result<(), SerializedError> {
-    let copy_contents = |source: &Path, destination: &Path| -> io::Result<()> {
-        fs::create_dir_all(destination)?;
-        for entry in fs::read_dir(source)? {
-            let entry = entry?;
-            let kind = entry.file_type()?;
-            let from = entry.path();
-            let to = destination.join(entry.file_name());
-            if kind.is_symlink() { return Err(io::Error::new(io::ErrorKind::InvalidData, "Map contains a symbolic link")); }
-            if kind.is_dir() {
-                copy_contents_inner(&from, &to)?;
-            } else if kind.is_file() {
-                fs::copy(from, to)?;
-            }
+    copy_map_directory_inner(source, destination, None)
+}
+
+fn copy_map_directory_cancellable(source: &Path, destination: &Path, cancelled: &AtomicBool) -> Result<(), SerializedError> {
+    copy_map_directory_inner(source, destination, Some(cancelled))
+}
+
+fn copy_map_directory_inner(
+    source: &Path,
+    destination: &Path,
+    cancelled: Option<&AtomicBool>,
+) -> Result<(), SerializedError> {
+    if fs::symlink_metadata(destination).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
+        return Err(serialized_error("Map destination cannot be a symbolic link", "INVALID_PATH"));
+    }
+    if destination.exists() && !destination.is_dir() {
+        return Err(serialized_error("Map destination must be a folder", "INVALID_PATH"));
+    }
+    let parent = destination.parent()
+        .ok_or_else(|| serialized_error("Map destination has no parent folder", "INVALID_PATH"))?;
+    let staging = parent.join(format!(".bsmanager-map-copy-{}", uuid::Uuid::new_v4()));
+    let backup = parent.join(format!(".bsmanager-map-copy-backup-{}", uuid::Uuid::new_v4()));
+    let result = (|| {
+        if destination.is_dir() {
+            copy_map_tree(destination, &staging, cancelled)?;
+        } else {
+            fs::create_dir_all(&staging)?;
         }
+        copy_map_tree(source, &staging, cancelled)?;
+        check_map_copy_cancelled(cancelled)?;
+
+        let had_destination = destination.exists();
+        if had_destination {
+            fs::rename(destination, &backup)?;
+        }
+        if let Err(error) = fs::rename(&staging, destination) {
+            if had_destination { let _ = fs::rename(&backup, destination); }
+            return Err(error);
+        }
+        if had_destination { let _ = fs::remove_dir_all(&backup); }
         Ok(())
-    };
-    fn copy_contents_inner(source: &Path, destination: &Path) -> io::Result<()> {
-        fs::create_dir_all(destination)?;
-        for entry in fs::read_dir(source)? {
-            let entry = entry?;
-            let kind = entry.file_type()?;
-            let from = entry.path();
-            let to = destination.join(entry.file_name());
-            if kind.is_symlink() { return Err(io::Error::new(io::ErrorKind::InvalidData, "Map contains a symbolic link")); }
-            if kind.is_dir() { copy_contents_inner(&from, &to)?; }
-            else if kind.is_file() { fs::copy(from, to)?; }
+    })();
+    if result.is_err() { let _ = fs::remove_dir_all(&staging); }
+    result.map_err(|error: io::Error| {
+        if cancelled.is_some_and(|cancelled| cancelled.load(Ordering::Relaxed)) {
+            serialized_error("Map copy was cancelled", "REQUEST_CANCELLED")
+        } else {
+            serialized_error(error.to_string(), "MAP_COPY_FAILED")
         }
+    })
+}
+
+fn check_map_copy_cancelled(cancelled: Option<&AtomicBool>) -> io::Result<()> {
+    if cancelled.is_some_and(|cancelled| cancelled.load(Ordering::Relaxed)) {
+        Err(io::Error::new(io::ErrorKind::Interrupted, "Map copy was cancelled"))
+    } else {
         Ok(())
     }
-    copy_contents(source, destination)
-        .map_err(|error| serialized_error(error.to_string(), "MAP_COPY_FAILED"))
+}
+
+fn copy_map_tree(source: &Path, destination: &Path, cancelled: Option<&AtomicBool>) -> io::Result<()> {
+    check_map_copy_cancelled(cancelled)?;
+    fs::create_dir_all(destination)?;
+    for entry in fs::read_dir(source)? {
+        check_map_copy_cancelled(cancelled)?;
+        let entry = entry?;
+        let kind = entry.file_type()?;
+        let from = entry.path();
+        let to = destination.join(entry.file_name());
+        if kind.is_symlink() {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "Map contains a symbolic link"));
+        }
+        if kind.is_dir() {
+            copy_map_tree(&from, &to, cancelled)?;
+        } else if kind.is_file() {
+            copy_map_file(&from, &to, cancelled)?;
+        }
+    }
+    Ok(())
+}
+
+fn copy_map_file(source: &Path, destination: &Path, cancelled: Option<&AtomicBool>) -> io::Result<()> {
+    let mut input = File::open(source)?;
+    let mut output = File::create(destination)?;
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        check_map_copy_cancelled(cancelled)?;
+        let read = input.read(&mut buffer)?;
+        if read == 0 { return Ok(()); }
+        io::Write::write_all(&mut output, &buffer[..read])?;
+    }
 }
 
 fn sanitize_folder_name(value: &str) -> String {
