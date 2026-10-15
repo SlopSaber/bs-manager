@@ -44,6 +44,7 @@ pub async fn get_version_playlists<R: Runtime>(
     version: &Value,
     cancelled: Arc<AtomicBool>,
 ) -> Result<Value, SerializedError> {
+    let _ = tokio::time::timeout(Duration::from_secs(15), crate::song_cache::initialize(app)).await;
     let folder = playlist_folder(app, version)?;
     tokio::fs::create_dir_all(&folder).await
         .map_err(|error| serialized_error(error.to_string(), "PLAYLIST_PATH_FAILED"))?;

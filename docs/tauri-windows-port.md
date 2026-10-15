@@ -15,8 +15,8 @@ Each command type-checks the Tauri renderer contracts, builds all six HTML entry
 
 Current local installers compile successfully and are unsigned. The generated NSIS script contains both preinstall and preuninstall hook call sites. The hook code was included in the installer builds, but neither installer has been executed; migration, registry restoration, and uninstall behavior still need user-led review:
 
-- Preview: `release/tauri/preview/BSManager-Preview-1.6.0-x64-setup.exe`, SHA-256 `363dbe2e605d43135cecf58474a3e1bd3c02b9d10e9160cf7811175540dfff7a`.
-- Replacement: `release/tauri/replacement/BSManager-1.6.0-x64-setup.exe`, SHA-256 `1a6bec093ac487a0ee0001afb9e75480fc41dbfbba52f6965aa53dce39818887`.
+- Preview: `release/tauri/preview/BSManager-Preview-1.6.0-x64-setup.exe`, SHA-256 `e75fd34dbdbd9dbd7d09d262198e378000fc4b993b4cd7b0f25f4eacb76b9a97`.
+- Replacement: `release/tauri/replacement/BSManager-1.6.0-x64-setup.exe`, SHA-256 `f30525da919525021a2ae2a5f55496fcea474934ca1b67579f8940c33313f11a`.
 
 ## Implemented in the Rust host
 
@@ -25,7 +25,7 @@ Current local installers compile successfully and are unsigned. The generated NS
 - Steam sidecar download routes, Meta login/session routes, Meta downloads, game launch, Windows VR runtime and sideload controls, and supporter data.
 - ModelSaber search and lookup; model download, one-click installation, local listing, export, and deletion.
 - BeatSaver map and playlist search/details; local map listing, deletion, import/export, download, and one-click install. Map installs stage archive extraction, compute the Beat Saber hash, validate it against BeatSaver, then move the map into the managed folder.
-- BeatSaver detail caching for maps fetched during the current session and the `get-maps-info-from-cache` route. Playlist details use cached song metadata for duration, mapper count, NPS, and song details when available; the bulk scraped cache is not yet loaded or persisted.
+- BeatSaver response caching for maps fetched during the current session. The scraped song-detail cache loads the existing replacement-profile protobuf file, refreshes it from the current sources with ETag support, stores it beside profile settings, and supplies detail data to local maps and playlists. Preview cache files remain separate. Per-folder `map-info-cache.json` reuse is not implemented yet.
 - Playlist listing, file import, install, delete, archive export, download, and one-click install. Download progress keeps the renderer’s existing payload shape.
 - BeatMods availability and health routes; installed-mod discovery, DLL/ZIP import, download and content-hash validation, installation, removal, and remove-all. Archive member paths reject traversal and symbolic links. IPA execution and network cancellation still need runtime review.
 - Update checks report no update. Download/install routes return `UPDATES_DISABLED` until a signed Tauri update endpoint is configured. Taskbar progress follows renderer progress on the originating window.
@@ -36,7 +36,7 @@ These routes compile. Their runtime behavior has not yet passed the user-led acc
 
 ## Remaining parity work
 
-- All shared Windows IPC route names are registered; the only shared routes absent from Rust are Linux-specific. Bulk map-cache loading and persistence, deep-link delivery, and some configuration or library behavior still need implementation or parity review. See `src/shared/models/ipc/ipc-routes.ts` and `src/main/ipcs` for the source inventory.
+- All shared Windows IPC route names are registered; the only shared routes absent from Rust are Linux-specific. Per-folder map-info cache reuse, deep-link delivery, and some configuration or library behavior still need implementation or parity review. See `src/shared/models/ipc/ipc-routes.ts` and `src/main/ipcs` for the source inventory.
 - Verify six-window behavior and window-specific capabilities. The shared renderer entry pages exist, but the auxiliary window lifecycle and remote authentication/webview isolation need acceptance review.
 - Finish first-run preview library import behavior and replacement install failure recovery. The replacement hook retains configuration and registry backups, but an uninstaller that succeeds before a later Tauri install failure still requires manual Electron reinstall for rollback. Exercise both hooks, protocol restoration, and rollback in user-led review. Replacement is not ready to replace an installed Electron build.
 - Complete Meta and Steam credential migration, download resume/error paths, map and playlist cache parity, mod dependency and IPA behavior, content sharing, archive interruption recovery, relocation, shortcuts, LIV integration, proxy behavior, process tracking, and signed update endpoint configuration.

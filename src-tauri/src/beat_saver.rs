@@ -21,23 +21,26 @@ pub async fn dispatch(channel: &str, args: &Value) -> Result<Value, SerializedEr
     }
 }
 
-pub fn get_map_details_from_cache(args: &Value) -> Result<Value, SerializedError> {
+pub async fn get_map_details_from_cache<R: tauri::Runtime>(app: &tauri::AppHandle<R>, args: &Value) -> Result<Value, SerializedError> {
+    crate::song_cache::initialize(app).await;
     let hashes = args.as_array().ok_or_else(|| serialized_error("Map hashes must be an array", "INVALID_HASHES"))?;
     let cache = MAP_CACHE.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
     let cache = cache.lock().map_err(|_| serialized_error("BeatSaver cache is unavailable", "CACHE_FAILED"))?;
-    let details = hashes.iter().filter_map(Value::as_str)
-        .filter_map(|hash| cache.get(&hash.to_ascii_lowercase()))
-        .map(map_to_song_details).collect::<Vec<_>>();
+    let details = hashes.iter().filter_map(Value::as_str).filter_map(|hash| {
+        crate::song_cache::by_hash(hash).or_else(|| cache.get(&hash.to_ascii_lowercase()).map(map_to_song_details))
+    }).collect::<Vec<_>>();
     Ok(json!(details))
 }
 
 pub fn song_details_from_cache(hash: &str) -> Option<Value> {
+    if let Some(details) = crate::song_cache::by_hash(hash) { return Some(details); }
     let cache = MAP_CACHE.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
     let map = cache.lock().ok()?.get(&hash.to_ascii_lowercase())?.clone();
     Some(map_to_song_details(&map))
 }
 
 pub fn song_details_by_id_from_cache(id: &str) -> Option<Value> {
+    if let Some(details) = crate::song_cache::by_id(id) { return Some(details); }
     let cache = MAP_CACHE.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
     let map = cache.lock().ok()?.values().find(|map| map.get("id").and_then(Value::as_str) == Some(id))?.clone();
     Some(map_to_song_details(&map))

@@ -31,6 +31,7 @@ pub async fn load_version_maps<R: Runtime>(
     version: &Value,
     cancelled: Arc<AtomicBool>,
 ) -> Result<Value, SerializedError> {
+    let _ = tokio::time::timeout(Duration::from_secs(30), crate::song_cache::initialize(app)).await;
     let root = map_folder(app, version)?;
     if version.is_null() {
         tokio::fs::create_dir_all(&root).await
@@ -789,14 +790,18 @@ fn load_map_info(path: &Path) -> Result<Option<Value>, String> {
     let cover_path = safe_child(path, cover_filename)?;
     let song_url = Url::from_file_path(&song_path).map_err(|_| "Could not create song file URL".to_owned())?;
     let cover_url = Url::from_file_path(&cover_path).map_err(|_| "Could not create cover file URL".to_owned())?;
-    Ok(Some(json!({
+    let mut result = json!({
         "mapInfo": map_info,
         "coverUrl": cover_url,
         "songUrl": song_url,
         "hash": hash,
         "path": path,
         "metadata": metadata,
-    })))
+    }).as_object().cloned().ok_or_else(|| "Could not construct local map details".to_owned())?;
+    if let Some(song_details) = crate::song_cache::by_hash(&hash) {
+        result.insert("songDetails".to_owned(), song_details);
+    }
+    Ok(Some(Value::Object(result)))
 }
 
 fn parse_map_info(raw: &Value) -> Result<Value, String> {

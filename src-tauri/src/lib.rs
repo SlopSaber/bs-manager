@@ -25,6 +25,7 @@ mod maps;
 mod playlists;
 mod mods;
 mod protocols;
+mod song_cache;
 
 const VERSION_LIBRARY: &str = include_str!("../../assets/jsons/bs-versions.json");
 const SUPPORTERS: &str = include_str!("../../assets/jsons/patreons.json");
@@ -464,7 +465,7 @@ async fn handle_request<R: Runtime>(
         "search-models" => models::search_models(&args).await,
         "bsv-search-map" | "bsv-get-map-details-from-hashs" | "bsv-get-map-details-by-id" |
         "bsv-search-playlist" | "bsv-get-playlist-details-by-id" => beat_saver::dispatch(channel, &args).await,
-        "get-maps-info-from-cache" => beat_saver::get_map_details_from_cache(&args),
+        "get-maps-info-from-cache" => beat_saver::get_map_details_from_cache(app, &args).await,
         "load-version-maps" => maps::load_version_maps(app, window, response_channel, &args, cancelled).await,
         "delete-maps" => {
             let app_state = app.state::<AppState>();
@@ -1050,6 +1051,8 @@ pub fn run() {
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .invoke_handler(tauri::generate_handler![ipc_send, register_protocol])
         .setup(|app| {
+            let cache_app = app.handle().clone();
+            tauri::async_runtime::spawn(async move { song_cache::initialize(&cache_app).await; });
             for argument in std::env::args_os().skip(1).filter_map(|argument| argument.into_string().ok()) {
                 handle_launch_argument(app.handle(), &argument);
             }
