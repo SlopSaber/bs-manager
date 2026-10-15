@@ -15,12 +15,12 @@ Each command type-checks the Tauri renderer contracts, builds all six HTML entry
 
 Current local installers compile successfully and are unsigned. The generated NSIS script contains both preinstall and preuninstall hook call sites. The hook code was included in the installer builds, but neither installer has been executed; migration, registry restoration, and uninstall behavior still need user-led review:
 
-- Preview: `release/tauri/preview/BSManager-Preview-1.6.0-x64-setup.exe`, SHA-256 `2122cdfe4766df588160a0d2259c37d78da390936007808d2cfc66cb7a217d11`.
-- Replacement: `release/tauri/replacement/BSManager-1.6.0-x64-setup.exe`, SHA-256 `381e9eb3b7e1e7bfc56157c009365a82f78b116387cadd751fe783e62b88305f`.
+- Preview: `release/tauri/preview/BSManager-Preview-1.6.0-x64-setup.exe`, SHA-256 `5710d5c3ac3eb20baec875da381b9f252f569f39d485123c60bf6478028cad4a`.
+- Replacement: `release/tauri/replacement/BSManager-1.6.0-x64-setup.exe`, SHA-256 `43279d8e7e35e9030a04aba1af29e1044b68fdbd6f5285a918f59afd8143d1c3`.
 
 ## Implemented in the Rust host
 
-- Separate preview and replacement identifiers and settings directories. The preview installer does not claim protocols or file extensions. Explicit protocol registration backs up the current per-user handler; each profile’s NSIS uninstaller restores it only while the registry command still points to that profile. The replacement preinstall hook backs up legacy config and protocol/file-association registry keys, then invokes the registered Electron uninstaller. It aborts on ambiguity, a running legacy process, or uninstall failure; it does not delete game libraries. Settings read/write, install-folder selection, and explicit legacy-settings import routes exist.
+- Separate preview and replacement identifiers and settings directories. The preview installer does not claim protocols or file extensions. The playlist deep-link setting manages both the `bsplaylist` URI and `.bplist` file association, backing up existing per-user handlers; each profile’s NSIS uninstaller restores them only while the registry still points to that profile. The replacement preinstall hook backs up legacy config and protocol/file-association registry keys, then invokes the registered Electron uninstaller. It aborts on ambiguity, a running legacy process, or uninstall failure; it does not delete game libraries. Settings read/write, install-folder selection, and explicit legacy-settings import routes exist.
 - Main window setup, native dialogs, window controls, drag/drop events, single-instance handling, protocol registration and routing, local version catalog, installation-folder operations, local version discovery/edit/clone/uninstall, shared-folder links, launch-shortcut creation, and restart-after-reply.
 - Steam sidecar download routes, Meta login/session routes, Meta downloads, game launch, Windows VR runtime and sideload controls, and supporter data. Close-on-launch tracks a newly created Beat Saber process by PID, creation time, and executable path.
 - ModelSaber search and lookup; model download, one-click installation, local listing, export, and deletion.

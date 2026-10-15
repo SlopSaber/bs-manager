@@ -703,9 +703,9 @@ async fn handle_request<R: Runtime>(
         "register-maps-deep-link" => set_protocols(app, window, &["beatsaver", "web+bsmap"], true),
         "unregister-maps-deep-link" => set_protocols(app, window, &["beatsaver", "web+bsmap"], false),
         "is-map-deep-links-enabled" => are_protocols_registered(app, window, &["beatsaver", "web+bsmap"]),
-        "register-playlists-deep-link" => set_protocols(app, window, &["bsplaylist"], true),
-        "unregister-playlists-deep-link" => set_protocols(app, window, &["bsplaylist"], false),
-        "is-playlists-deep-links-enabled" => are_protocols_registered(app, window, &["bsplaylist"]),
+        "register-playlists-deep-link" => set_playlist_handlers(app, window, true),
+        "unregister-playlists-deep-link" => set_playlist_handlers(app, window, false),
+        "is-playlists-deep-links-enabled" => are_playlist_handlers_registered(app, window),
         "register-models-deep-link" => set_protocols(app, window, &["modelsaber"], true),
         "unregister-models-deep-link" => set_protocols(app, window, &["modelsaber"], false),
         "is-models-deep-links-enabled" => are_protocols_registered(app, window, &["modelsaber"]),
@@ -1018,6 +1018,30 @@ fn are_protocols_registered<R: Runtime>(app: &AppHandle<R>, window: &WebviewWind
             .map_err(|error| serialized_error(error, "PROTOCOL_QUERY_FAILED"))?;
     }
     Ok(json!(registered))
+}
+
+fn set_playlist_handlers<R: Runtime>(app: &AppHandle<R>, window: &WebviewWindow<R>, enabled: bool) -> Result<Value, SerializedError> {
+    if window.label() != "main" {
+        return Err(serialized_error("Playlist associations are only available in the main window", "WINDOW_NOT_ALLOWED"));
+    }
+    protocols::set(app, "bsplaylist", enabled)
+        .map_err(|error| serialized_error(error, "PROTOCOL_REGISTRATION_FAILED"))?;
+    if let Err(error) = protocols::set_bplist_association(app, enabled) {
+        let _ = protocols::set(app, "bsplaylist", !enabled);
+        return Err(serialized_error(error, "FILE_ASSOCIATION_FAILED"));
+    }
+    Ok(json!(true))
+}
+
+fn are_playlist_handlers_registered<R: Runtime>(app: &AppHandle<R>, window: &WebviewWindow<R>) -> Result<Value, SerializedError> {
+    if window.label() != "main" {
+        return Err(serialized_error("Playlist association settings are only available in the main window", "WINDOW_NOT_ALLOWED"));
+    }
+    let protocol = protocols::is_registered(app, "bsplaylist")
+        .map_err(|error| serialized_error(error, "PROTOCOL_QUERY_FAILED"))?;
+    let file_association = protocols::is_bplist_associated(app)
+        .map_err(|error| serialized_error(error, "FILE_ASSOCIATION_QUERY_FAILED"))?;
+    Ok(json!(protocol && file_association))
 }
 
 pub fn run() {

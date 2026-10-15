@@ -8,6 +8,9 @@ use tauri::{AppHandle, Manager, Runtime};
 use tauri_plugin_deep_link::DeepLinkExt;
 use winreg::{RegKey, enums::{HKEY_CURRENT_USER, KEY_READ}};
 
+const BPLIST_EXTENSION: &str = ".bplist";
+const BPLIST_PROG_ID: &str = "BSManager.BeatSaberPlaylist";
+
 pub fn set<R: Runtime>(app: &AppHandle<R>, protocol: &str, enabled: bool) -> Result<(), String> {
     if enabled {
         register(app, protocol)
@@ -27,6 +30,129 @@ pub fn is_registered<R: Runtime>(app: &AppHandle<R>, protocol: &str) -> Result<b
         return Ok(true);
     }
     app.deep_link().is_registered(protocol).map_err(|error| error.to_string())
+}
+
+pub fn set_bplist_association<R: Runtime>(app: &AppHandle<R>, enabled: bool) -> Result<(), String> {
+    if enabled { register_bplist_association(app) } else { unregister_bplist_association_if_owned(app) }
+}
+
+pub fn is_bplist_associated<R: Runtime>(app: &AppHandle<R>) -> Result<bool, String> {
+    let current = current_executable()?;
+    let owner = read_owner(app, "bplist")?;
+    let Some(prog_id) = class_default_value(BPLIST_EXTENSION)? else { return Ok(false); };
+    if !prog_id.eq_ignore_ascii_case(BPLIST_PROG_ID) { return Ok(false); }
+    let command = class_command(BPLIST_PROG_ID)?;
+    Ok(command.as_deref().is_some_and(|command| {
+        command_matches(command, &current)
+            || owner.as_deref().is_some_and(|owner| command_matches(command, owner))
+    }))
+}
+
+fn register_bplist_association<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    let directory = backup_directory(app)?;
+    fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+    let current = current_executable()?;
+    if !is_bplist_associated(app)? {
+        backup_class_key(BPLIST_EXTENSION, &directory.join("bplist-extension.reg"))?;
+        backup_class_key(BPLIST_PROG_ID, &directory.join("bplist-progid.reg"))?;
+    }
+
+    let result = (|| {
+        let user = RegKey::predef(HKEY_CURRENT_USER);
+        let (extension, _) = user.create_subkey(format!("Software\\Classes\\{BPLIST_EXTENSION}"))
+            .map_err(|error| error.to_string())?;
+        extension.set_value("", &BPLIST_PROG_ID).map_err(|error| error.to_string())?;
+
+        let (class, _) = user.create_subkey(format!("Software\\Classes\\{BPLIST_PROG_ID}"))
+            .map_err(|error| error.to_string())?;
+        class.set_value("", &"Beat Saber Playlist").map_err(|error| error.to_string())?;
+        let (icon, _) = class.create_subkey("DefaultIcon").map_err(|error| error.to_string())?;
+        icon.set_value("", &format!("\"{current}\",0")).map_err(|error| error.to_string())?;
+        let (command, _) = class.create_subkey("shell\\open\\command").map_err(|error| error.to_string())?;
+        command.set_value("", &format!("\"{current}\" \"%1\"")).map_err(|error| error.to_string())?;
+        write_owner(app, "bplist", &current)
+    })();
+    if let Err(error) = result {
+        let _ = restore_class_key(BPLIST_PROG_ID, &directory.join("bplist-progid.reg"));
+        let _ = restore_class_key(BPLIST_EXTENSION, &directory.join("bplist-extension.reg"));
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn unregister_bplist_association_if_owned<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    let Some(owner) = read_owner(app, "bplist")?.or_else(|| current_executable().ok()) else { return Ok(()); };
+    if !is_bplist_associated(app)? { return Ok(()); }
+    let command = class_command(BPLIST_PROG_ID)?;
+    if !command.as_deref().is_some_and(|command| command_matches(command, &owner)) { return Ok(()); }
+    let directory = backup_directory(app)?;
+    restore_class_key(BPLIST_PROG_ID, &directory.join("bplist-progid.reg"))?;
+    restore_class_key(BPLIST_EXTENSION, &directory.join("bplist-extension.reg"))
+}
+
+fn class_default_value(class_name: &str) -> Result<Option<String>, String> {
+    let user = RegKey::predef(HKEY_CURRENT_USER);
+    match user.open_subkey_with_flags(format!("Software\\Classes\\{class_name}"), KEY_READ) {
+        Ok(key) => match key.get_value::<String, _>("") {
+            Ok(value) => Ok(Some(value)),
+            Err(error) if error.raw_os_error() == Some(2) => Ok(None),
+            Err(error) => Err(error.to_string()),
+        },
+        Err(error) if error.raw_os_error() == Some(2) => Ok(None),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+fn class_command(class_name: &str) -> Result<Option<String>, String> {
+    let key_path = format!("Software\\Classes\\{class_name}\\shell\\open\\command");
+    let user = RegKey::predef(HKEY_CURRENT_USER);
+    match user.open_subkey_with_flags(key_path, KEY_READ) {
+        Ok(key) => match key.get_value::<String, _>("") {
+            Ok(value) => Ok(Some(value)),
+            Err(error) if error.raw_os_error() == Some(2) => Ok(None),
+            Err(error) => Err(error.to_string()),
+        },
+        Err(error) if error.raw_os_error() == Some(2) => Ok(None),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+fn backup_class_key(class_name: &str, destination: &PathBuf) -> Result<(), String> {
+    let key_path = format!("Software\\Classes\\{class_name}");
+    let user = RegKey::predef(HKEY_CURRENT_USER);
+    match user.open_subkey_with_flags(&key_path, KEY_READ) {
+        Ok(_) => {
+            let export_key = format!("HKCU\\{key_path}");
+            let result = Command::new("reg.exe").args(["export", &export_key])
+                .arg(destination).arg("/y").output().map_err(|error| error.to_string())?;
+            if !result.status.success() {
+                return Err(format!("Could not back up the {class_name} file association: {}", String::from_utf8_lossy(&result.stderr).trim()));
+            }
+        }
+        Err(error) if error.raw_os_error() == Some(2) => {
+            if destination.exists() { fs::remove_file(destination).map_err(|error| error.to_string())?; }
+        }
+        Err(error) => return Err(error.to_string()),
+    }
+    Ok(())
+}
+
+fn restore_class_key(class_name: &str, backup: &PathBuf) -> Result<(), String> {
+    let key_path = format!("Software\\Classes\\{class_name}");
+    let user = RegKey::predef(HKEY_CURRENT_USER);
+    match user.delete_subkey_all(&key_path) {
+        Ok(()) => {},
+        Err(error) if error.raw_os_error() == Some(2) => {},
+        Err(error) => return Err(error.to_string()),
+    }
+    if backup.is_file() {
+        let result = Command::new("reg.exe").arg("import").arg(backup)
+            .output().map_err(|error| error.to_string())?;
+        if !result.status.success() {
+            return Err(format!("Could not restore the previous {class_name} file association: {}", String::from_utf8_lossy(&result.stderr).trim()));
+        }
+    }
+    Ok(())
 }
 
 fn register<R: Runtime>(app: &AppHandle<R>, protocol: &str) -> Result<(), String> {
