@@ -223,6 +223,7 @@ Linux Proton routes are intentionally outside this Windows-only rewrite: `linux.
 - [ ] Meta login cookie capture, remembered session, expired credential, logout, manifest download, decompression, integrity failure, resume, and cancel.
 - [ ] Steam and Meta launch, VR detection/warning, arguments/environment, elevation denied, process tracking, close-on-launch, and LIV integration.
 - [ ] Version import, edit, clone, verify, relocation, delete, shared junctions/symlinks, backup/restore, and shortcut creation.
+- [x] Linker source fix: link/unlink promises now track the exact queued action, and cancelling a pending action resolves it without removing an active operation. Packaged junction/symlink behavior remains unchecked.
 - [ ] Mod dependencies, import/install/uninstall, maps and playlists, model operations, search/filter/sort, archives, sharing, caches, and audio previews.
 - [x] Source guard for repeated BSManager-logo clicks: audio playback requests now track desired state and ignore stale completions.
 - [ ] Rapidly click the BSManager logo during and after an audio preview; confirm playback toggles cleanly and the app remains open.

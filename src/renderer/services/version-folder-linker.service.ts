@@ -90,9 +90,10 @@ export class VersionFolderLinkerService {
     }
 
     public linkVersionFolder(action: VersionLinkFolderAction): Promise<boolean> {
+        const queuedAction: VersionLinkerAction = { ...action, type: VersionLinkerActionType.Link };
         const promise = new Promise<boolean>(resolve => {
             const callBack: VersionLinkerActionListener = (performedAction, linked) => {
-                if (performedAction !== action) {
+                if (performedAction !== queuedAction) {
                     return;
                 }
                 this.removeVersionFolderLinkedListener(callBack);
@@ -102,15 +103,16 @@ export class VersionFolderLinkerService {
             this.onVersionFolderLinked(callBack);
         });
 
-        this._queue$.next([...this._queue$.value, {...action, type: VersionLinkerActionType.Link}]);
+        this._queue$.next([...this._queue$.value, queuedAction]);
 
         return promise;
     }
 
     public unlinkVersionFolder(action: VersionUnlinkFolderAction): Promise<boolean> {
+        const queuedAction: VersionLinkerAction = { ...action, type: VersionLinkerActionType.Unlink };
         const promise = new Promise<boolean>(resolve => {
             const callBack: VersionLinkerActionListener = (performedAction, linked) => {
-                if (performedAction !== action) {
+                if (performedAction !== queuedAction) {
                     return;
                 }
                 this.removeVersionFolderUnlinkedListener(callBack);
@@ -120,7 +122,7 @@ export class VersionFolderLinkerService {
             this.onVersionFolderUnlinked(callBack);
         });
 
-        this._queue$.next([...this._queue$.value, {...action, type: VersionLinkerActionType.Unlink}]);
+        this._queue$.next([...this._queue$.value, queuedAction]);
 
         return promise;
     }
@@ -142,7 +144,22 @@ export class VersionFolderLinkerService {
     }
 
     public cancelAction(version: BSVersion, relativeFolder: string): void {
-        this._queue$.next(this._queue$.value.filter(a => a.version !== version || a.relativeFolder !== relativeFolder));
+        const [current, ...pending] = this._queue$.value;
+        const cancelled = pending.filter(action => equal(action.version, version) && action.relativeFolder === relativeFolder);
+        if (cancelled.length === 0) {
+            return;
+        }
+
+        for (const action of cancelled) {
+            const listeners = action.type === VersionLinkerActionType.Link ? this.linkListeners : this.unlinkListeners;
+            for (const listener of [...listeners]) {
+                listener(action, false);
+            }
+        }
+
+        this._queue$.next(current
+            ? [current, ...pending.filter(action => !cancelled.includes(action))]
+            : pending.filter(action => !cancelled.includes(action)));
     }
 
     public isVersionFolderLinked(version: BSVersion, relativeFolder: string): Observable<boolean> {
