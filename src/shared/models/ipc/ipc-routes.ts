@@ -58,6 +58,9 @@ export interface IpcChannelMapping {
     "preview.import-legacy-settings": { request: void, response: Record<string, string> };
     "preview.complete-renderer-settings-import": { request: void, response: void };
     "preview.skip-legacy-settings-import": { request: void, response: void };
+    "replacement.legacy-renderer-settings-import-needed": { request: void, response: boolean };
+    "replacement.import-legacy-renderer-settings": { request: void, response: Record<string, string> };
+    "replacement.complete-legacy-renderer-settings-import": { request: void, response: void };
 
     /* ** bs-launcher-ipcs ** */
     "create-launch-shortcut": { request: { options: LaunchOption, steamShortcut?: boolean }, response: boolean };

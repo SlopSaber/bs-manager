@@ -53,27 +53,30 @@ export class SetupService {
 
     private async checkLegacySettingsImport(): Promise<void> {
         try {
-            const needed = await lastValueFrom(this.ipcService.sendV2("preview.legacy-settings-import-needed"));
-            if (!needed) {
+            const previewImportNeeded = await lastValueFrom(this.ipcService.sendV2("preview.legacy-settings-import-needed"));
+            if (previewImportNeeded) {
+                const response = await this.modalService.openModal(
+                    PreviewSettingsImportModal,
+                    { closable: false }
+                );
+
+                if (response.data === "import") {
+                    const imported = await lastValueFrom(this.ipcService.sendV2("preview.import-legacy-settings"));
+                    this.importRendererSettings(imported);
+                    await lastValueFrom(this.ipcService.sendV2("preview.complete-renderer-settings-import"));
+                    await this.versionManagerService.refreshInstalledVersions();
+                } else {
+                    await lastValueFrom(this.ipcService.sendV2("preview.skip-legacy-settings-import"));
+                }
                 return;
             }
 
-            const response = await this.modalService.openModal(
-                PreviewSettingsImportModal,
-                { closable: false }
-            );
+            const replacementImportNeeded = await lastValueFrom(this.ipcService.sendV2("replacement.legacy-renderer-settings-import-needed"));
+            if (!replacementImportNeeded) return;
 
-            if (response.data === "import") {
-                const imported = await lastValueFrom(this.ipcService.sendV2("preview.import-legacy-settings"));
-                const configurationService = ConfigurationService.getInstance();
-                for (const [key, value] of Object.entries(imported)) {
-                    configurationService.importSerializedIfMissing(key, value);
-                }
-                await lastValueFrom(this.ipcService.sendV2("preview.complete-renderer-settings-import"));
-                await this.versionManagerService.refreshInstalledVersions();
-            } else {
-                await lastValueFrom(this.ipcService.sendV2("preview.skip-legacy-settings-import"));
-            }
+            const imported = await lastValueFrom(this.ipcService.sendV2("replacement.import-legacy-renderer-settings"));
+            this.importRendererSettings(imported);
+            await lastValueFrom(this.ipcService.sendV2("replacement.complete-legacy-renderer-settings-import"));
         } catch (error) {
             logRenderError("Could not import legacy BSManager settings", error);
             const message = typeof error === "object" && error !== null && "message" in error && typeof error.message === "string"
@@ -84,6 +87,13 @@ export class SetupService {
                 desc: message,
                 duration: 12000,
             });
+        }
+    }
+
+    private importRendererSettings(settings: Record<string, string>): void {
+        const configurationService = ConfigurationService.getInstance();
+        for (const [key, value] of Object.entries(settings)) {
+            configurationService.importSerializedIfMissing(key, value);
         }
     }
 

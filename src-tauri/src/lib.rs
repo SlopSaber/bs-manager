@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fs, io::Write, path::{Path, PathBuf}, sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}}, time::Duration};
+use std::{collections::{BTreeMap, HashMap}, fs, io::Write, path::{Path, PathBuf}, sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}}, time::Duration};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use futures_util::StreamExt;
@@ -41,6 +41,8 @@ const LEGACY_APP_DIRECTORY: &str = "bs-manager";
 const PREVIEW_IMPORT_MARKER: &str = "preview-legacy-settings-import";
 const PREVIEW_RENDERER_IMPORT_MARKER: &str = "preview-renderer-settings-import";
 const PREVIEW_RENDERER_IMPORT_VERSION: u64 = 5;
+const REPLACEMENT_RENDERER_IMPORT_MARKER_FILE: &str = "legacy-renderer-settings-import.json";
+const REPLACEMENT_RENDERER_IMPORT_VERSION: u64 = 1;
 const MAX_UPDATE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
 #[derive(Default)]
@@ -179,6 +181,55 @@ fn preview_settings_import_needed<R: Runtime>(app: &AppHandle<R>) -> Result<bool
         Err(error) => return Err(format!("Could not inspect legacy settings: {error}")),
     };
     Ok(has_legacy_settings || has_renderer_settings)
+}
+
+fn replacement_renderer_settings_import_needed<R: Runtime>(app: &AppHandle<R>) -> Result<bool, String> {
+    if app.config().identifier != "io.bsmanager.bsmanager" {
+        return Ok(false);
+    }
+
+    let marker_path = app.path().app_config_dir()
+        .map_err(|error| error.to_string())?
+        .join(REPLACEMENT_RENDERER_IMPORT_MARKER_FILE);
+    match fs::read(marker_path) {
+        Ok(contents) => {
+            let marker = serde_json::from_slice::<Value>(&contents).ok();
+            Ok(marker.as_ref()
+                .and_then(|marker| marker.get("version"))
+                .and_then(Value::as_u64)
+                != Some(REPLACEMENT_RENDERER_IMPORT_VERSION))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(true),
+        Err(error) => Err(format!("Could not inspect replacement renderer import marker: {error}")),
+    }
+}
+
+fn complete_replacement_renderer_settings_import<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    if app.config().identifier != "io.bsmanager.bsmanager" {
+        return Err("Legacy renderer settings import is only available in the replacement profile".to_owned());
+    }
+
+    let path = app.path().app_config_dir()
+        .map_err(|error| error.to_string())?
+        .join(REPLACEMENT_RENDERER_IMPORT_MARKER_FILE);
+    let parent = path.parent().ok_or_else(|| "Replacement import marker path is invalid".to_owned())?;
+    fs::create_dir_all(parent).map_err(|error| format!("Could not create replacement import marker folder: {error}"))?;
+    let temporary = path.with_extension("json.tmp");
+    let marker = json!({ "version": REPLACEMENT_RENDERER_IMPORT_VERSION });
+    let contents = serde_json::to_vec(&marker).map_err(|error| error.to_string())?;
+    fs::write(&temporary, contents).map_err(|error| format!("Could not write replacement import marker: {error}"))?;
+    fs::rename(&temporary, &path).map_err(|error| format!("Could not replace replacement import marker: {error}"))
+}
+
+async fn read_legacy_renderer_settings<R: Runtime>(app: &AppHandle<R>) -> Result<BTreeMap<String, String>, SerializedError> {
+    let source = legacy_local_storage_path(app)
+        .map_err(|error| serialized_error(error, "SETTINGS_IMPORT_FAILED"))?;
+    let cache = app.path().app_cache_dir()
+        .map_err(|error| serialized_error(error.to_string(), "SETTINGS_IMPORT_FAILED"))?;
+    tokio::task::spawn_blocking(move || legacy_storage::read_preferences(&source, &cache))
+        .await
+        .map_err(|error| serialized_error(format!("Legacy preference reader failed: {error}"), "SETTINGS_IMPORT_FAILED"))?
+        .map_err(|error| serialized_error(error, "SETTINGS_IMPORT_FAILED"))
 }
 
 fn import_legacy_settings<R: Runtime>(app: &AppHandle<R>, import: bool) -> Result<(), String> {
@@ -999,12 +1050,7 @@ async fn handle_request<R: Runtime>(
             if window.label() != "main" {
                 return Err(serialized_error("Legacy settings import is only available in the main window", "WINDOW_NOT_ALLOWED"));
             }
-            let source = legacy_local_storage_path(app).map_err(|error| serialized_error(error, "SETTINGS_IMPORT_FAILED"))?;
-            let cache = app.path().app_cache_dir().map_err(|error| serialized_error(error.to_string(), "SETTINGS_IMPORT_FAILED"))?;
-            let renderer_settings = tokio::task::spawn_blocking(move || legacy_storage::read_preferences(&source, &cache))
-                .await
-                .map_err(|error| serialized_error(format!("Legacy preference reader failed: {error}"), "SETTINGS_IMPORT_FAILED"))?
-                .map_err(|error| serialized_error(error, "SETTINGS_IMPORT_FAILED"))?;
+            let renderer_settings = read_legacy_renderer_settings(app).await?;
             import_legacy_settings(app, true).map_err(|error| serialized_error(error, "SETTINGS_IMPORT_FAILED"))?;
             log::info!("Imported {} non-secret legacy renderer preferences", renderer_settings.len());
             Ok(json!(renderer_settings))
@@ -1022,6 +1068,29 @@ async fn handle_request<R: Runtime>(
                 return Err(serialized_error("Legacy settings import is only available in the main window", "WINDOW_NOT_ALLOWED"));
             }
             import_legacy_settings(app, false).map_err(|error| serialized_error(error, "SETTINGS_IMPORT_FAILED"))?;
+            Ok(Value::Null)
+        }
+        "replacement.legacy-renderer-settings-import-needed" => {
+            if window.label() != "main" {
+                return Err(serialized_error("Legacy renderer settings import is only available in the main window", "WINDOW_NOT_ALLOWED"));
+            }
+            Ok(json!(replacement_renderer_settings_import_needed(app)
+                .map_err(|error| serialized_error(error, "SETTINGS_IMPORT_CHECK_FAILED"))?))
+        }
+        "replacement.import-legacy-renderer-settings" => {
+            if window.label() != "main" {
+                return Err(serialized_error("Legacy renderer settings import is only available in the main window", "WINDOW_NOT_ALLOWED"));
+            }
+            let renderer_settings = read_legacy_renderer_settings(app).await?;
+            log::info!("Imported {} non-secret legacy renderer preferences into replacement profile", renderer_settings.len());
+            Ok(json!(renderer_settings))
+        }
+        "replacement.complete-legacy-renderer-settings-import" => {
+            if window.label() != "main" {
+                return Err(serialized_error("Legacy renderer settings import is only available in the main window", "WINDOW_NOT_ALLOWED"));
+            }
+            complete_replacement_renderer_settings_import(app)
+                .map_err(|error| serialized_error(error, "SETTINGS_IMPORT_FAILED"))?;
             Ok(Value::Null)
         }
         "static-configuration.get" => {

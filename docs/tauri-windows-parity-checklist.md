@@ -6,7 +6,7 @@ This checklist distinguishes source coverage from verified behavior. Route entri
 
 Review each route's payload shape, result/error behavior, progress sequence, cancellation where applicable, and effects on the correct library/profile. One-way routes should be checked for their expected side effects and error logging.
 
-- [x] Static source comparison on 2026-10-16 found all 104 Windows routes from the baseline shared IPC mapping, including the one-shot `shortcut-launch-options` listener, and all 3 direct `ipcMain.on` event routes in the Rust dispatcher. Three Linux-only routes are out of scope. Rust emits `window-arguments`; the renderer bridges native drops as `desktop-files-dropped`.
+- [x] Static source comparison on 2026-10-16 found all 104 Windows routes from the baseline shared IPC mapping, including the one-shot `shortcut-launch-options` listener, and all 3 direct `ipcMain.on` event routes in the Rust dispatcher. Three Linux-only routes are out of scope. Three Tauri-only replacement renderer-import routes are added separately. Rust emits `window-arguments`; the renderer bridges native drops as `desktop-files-dropped`.
 
 ### Download and authentication
 
@@ -47,6 +47,9 @@ Review each route's payload shape, result/error behavior, progress sequence, can
 - [ ] `preview.import-legacy-settings`
 - [ ] `preview.complete-renderer-settings-import`
 - [ ] `preview.skip-legacy-settings-import`
+- [ ] `replacement.legacy-renderer-settings-import-needed`
+- [ ] `replacement.import-legacy-renderer-settings`
+- [ ] `replacement.complete-legacy-renderer-settings-import`
 
 ### Launch and shortcuts
 
@@ -212,6 +215,7 @@ Linux Proton routes are intentionally outside this Windows-only rewrite: `linux.
 - [x] A read-only LevelDB key-name comparison found all 14 imported keys in both legacy and Preview storage, including `first-color`, `second-color`, launch settings, store selection, audio level, and dismissal choices. No stored values were recorded; runtime display remains pending.
 - [x] Read-only local data audit found legacy `config.json` and renderer LevelDB present; Preview selects `D:\` and uses library `D:\BSManager`. `D:\BSManager\config.cfg` contains one custom color record for Beat Saber `1.45.2` (`#45ffac`, default folder name); matching `BSInstances\1.45.2` contains `Beat Saber.exe` and `Beat Saber_Data\globalgamemanagers` with version string `1.45.2`. Color source and scan inputs are present; display in packaged app remains pending.
 - [x] Static migration-path audit confirms Preview stores settings separately, imports legacy `config.json` while retaining existing Preview values, and reads allow-listed renderer preferences from legacy LevelDB. Installed custom-version colors are read from the selected library's `config.cfg` by game-version/name. Runtime import and color display remain unverified.
+- [x] Replacement renderer migration reads the same allow-listed legacy LevelDB preferences, fills only missing Tauri localStorage keys, stores its completion marker under the replacement profile's app-config directory, and leaves legacy `config.json` untouched. Import remains idempotent and retries if interrupted before marker completion; runtime behavior remains unchecked.
 - [ ] Install `2.0.0-011ec9bd` and confirm Preview startup, Steam login state, imported settings, and the `1.45.2` version color. Existing Preview import marker is already version 5, so this install will not prompt for the same import again.
 - [ ] Steam password, QR, Steam Guard, remembered session, resume, CDN failover, verification, progress, input, cancel, and retry.
 - [ ] Meta login cookie capture, remembered session, expired credential, logout, manifest download, decompression, integrity failure, resume, and cancel.
@@ -221,6 +225,7 @@ Linux Proton routes are intentionally outside this Windows-only rewrite: `linux.
 - [ ] Deep links, `.bplist`, native file drop, playlist drag-and-drop, and external links.
 - [ ] Offline services, corrupt archive, inaccessible destination, interrupted operation, network retry, and app/window closure during a cancellable operation.
 - [ ] Preview first-run and v5 settings import copies configuration only, reuses selected library paths, keeps separate settings, and blocks shared-content mutations while legacy Electron runs. Version colors stay in shared library `config.cfg`; Preview scans read it without writing or creating missing content folders while Electron is open.
+- [ ] Replacement first-run imports allow-listed legacy renderer preferences into its separate WebView storage, preserves any values already set there, leaves Electron `config.json` and LevelDB untouched, and retries an interrupted import without showing Preview's import modal.
 - [ ] Preview Steam password/QR/Steam Guard download works while legacy Electron BSManager remains open, uses a separate staging and final version folder, and resumes an interrupted staged download after Electron closes.
 - [x] On 2026-10-16, source comparison found all 119 bundled version records, fields, and ordering match [upstream `bs-versions.json`](https://raw.githubusercontent.com/Zagrios/bs-manager/master/assets/jsons/bs-versions.json).
 - [ ] Packaged-app catalog starts with the bundled data, refreshes from the upstream URL, caches a valid response, and falls back offline without losing the bundled version list.
