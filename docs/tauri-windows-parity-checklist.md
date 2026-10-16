@@ -202,6 +202,7 @@ Linux Proton routes are intentionally outside this Windows-only rewrite: `linux.
 - [ ] Offline services, corrupt archive, inaccessible destination, interrupted operation, network retry, and app/window closure during a cancellable operation.
 - [ ] Preview first-run settings import copies configuration only, reuses selected library paths, uses separate settings, and blocks mutation while legacy Electron runs.
 - [ ] Preview installer does not claim existing protocols or file associations; explicit settings claim records prior owner and uninstall restores only while preview remains owner.
+- [ ] Preview and Replacement claim shared protocols and `.bplist`, then uninstall in both orders; remaining registrations never point at a removed profile, and original handlers return when stack has no live profile owner.
 - [ ] Replacement detects legacy install, backs up settings and registrations, aborts on running app or uninstall failure, preserves game data, and restores on rollback.
 - [ ] Replacement updater rejects missing/invalid signatures; preview and replacement update channels remain separate.
 - [ ] Uninstall of either profile preserves game libraries; rollback by reinstalling retained Electron installer and restoring configuration/registration backups.
