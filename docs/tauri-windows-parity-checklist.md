@@ -9,6 +9,13 @@ Review each route's payload shape, result/error behavior, progress sequence, can
 ### Download and authentication
 
 - [ ] `import-version`
+- [ ] `bs-steam-download`
+- [ ] `bs-steam-download-respond`
+- [ ] `bs-steam-stop-download`
+- [ ] `steam-session-exists`
+- [ ] `steam-session-username`
+- [ ] `delete-steam-session`
+- [ ] `import-legacy-steam-username`
 - [ ] `auto-download-bs-version`
 - [ ] `download-bs-version`
 - [ ] `download-bs-version-qr`
