@@ -192,7 +192,7 @@ Linux Proton routes are intentionally outside this Windows-only rewrite: `linux.
 - [ ] Default download store: Steam, Meta/Oculus, and ask each time.
 - [ ] Theme: dark, light, and operating-system preference.
 - [ ] First and second custom colors, including reset-to-default.
-- [ ] Preview import v4 restores missing legacy static settings and renderer preferences, launch options, download-store selection, audio level, and dismissal choices; preserves settings already changed in Preview; and refreshes installed versions. Last-launched version lookup treats missing store flags as false. Legacy encrypted Meta tokens prompt for login again.
+- [ ] Preview import v5 restores missing legacy static settings and renderer preferences, launch options, download-store selection, audio level, and dismissal choices; preserves settings already changed in Preview; and refreshes installed versions. Last-launched version lookup treats missing store flags as false. Legacy encrypted Meta tokens prompt for login again.
 - [ ] Custom version colors remain available from the shared library `config.cfg` in Preview and Replacement, including Preview while legacy BSManager is open; version, map, playlist, and model scans must not create or rewrite shared library files during that session.
 - [ ] Installation path edit, browse, validation, apply, and move existing installation.
 - [ ] Deep-link selection: all, Maps, Playlists plus `.bplist`, and Models; registration changes persist and uninstall restores only registrations still owned by profile.
@@ -211,7 +211,7 @@ Linux Proton routes are intentionally outside this Windows-only rewrite: `linux.
 - [ ] Mod dependencies, import/install/uninstall, maps and playlists, model operations, search/filter/sort, archives, sharing, caches, and audio previews.
 - [ ] Deep links, `.bplist`, native file drop, playlist drag-and-drop, and external links.
 - [ ] Offline services, corrupt archive, inaccessible destination, interrupted operation, network retry, and app/window closure during a cancellable operation.
-- [ ] Preview first-run and v4 settings import copies configuration only, reuses selected library paths, keeps separate settings, and blocks shared-content mutations while legacy Electron runs. Version colors stay in shared library `config.cfg`; Preview scans read it without writing or creating missing content folders while Electron is open.
+- [ ] Preview first-run and v5 settings import copies configuration only, reuses selected library paths, keeps separate settings, and blocks shared-content mutations while legacy Electron runs. Version colors stay in shared library `config.cfg`; Preview scans read it without writing or creating missing content folders while Electron is open.
 - [ ] Preview Steam password/QR/Steam Guard download works while legacy Electron BSManager remains open, uses a separate staging and final version folder, and resumes an interrupted staged download after Electron closes.
 - [ ] Version catalog begins with the bundled upstream database, refreshes from the upstream URL, caches a valid response, and falls back offline without losing the bundled version list.
 - [ ] Preview installer does not claim existing protocols or file associations; explicit settings claim records prior owner and uninstall restores only while preview remains owner.

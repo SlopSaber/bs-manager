@@ -40,7 +40,7 @@ const INSTALL_FOLDER: &str = "BSManager";
 const LEGACY_APP_DIRECTORY: &str = "bs-manager";
 const PREVIEW_IMPORT_MARKER: &str = "preview-legacy-settings-import";
 const PREVIEW_RENDERER_IMPORT_MARKER: &str = "preview-renderer-settings-import";
-const PREVIEW_RENDERER_IMPORT_VERSION: u64 = 4;
+const PREVIEW_RENDERER_IMPORT_VERSION: u64 = 5;
 const MAX_UPDATE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
 #[derive(Default)]
