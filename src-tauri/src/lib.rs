@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fs, path::{Path, PathBuf}, sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}}, time::Duration};
+use std::{collections::HashMap, fs, io::Write, path::{Path, PathBuf}, sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}}, time::Duration};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use futures_util::StreamExt;
@@ -1420,8 +1420,29 @@ fn are_playlist_handlers_registered<R: Runtime>(app: &AppHandle<R>, window: &Web
     Ok(json!(protocol && file_association))
 }
 
+fn install_startup_panic_hook(identifier: &str, redactions: Arc<Mutex<LogRedactions>>) {
+    let Some(local_app_data) = std::env::var_os("LOCALAPPDATA").map(PathBuf::from) else { return };
+    let log_path = local_app_data.join(identifier).join("logs").join("startup-panic.log");
+    let previous_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic_info| {
+        let message = panic_info.to_string();
+        let message = redactions.lock()
+            .map(|filters| filters.redact(&message))
+            .unwrap_or(message);
+        if let Some(directory) = log_path.parent() {
+            let _ = fs::create_dir_all(directory);
+        }
+        if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(&log_path) {
+            let _ = writeln!(file, "[{}] {message}", chrono::Utc::now().to_rfc3339());
+        }
+        previous_hook(panic_info);
+    }));
+}
+
 pub fn run() {
     let log_redactions = Arc::new(Mutex::new(LogRedactions::with_default_patterns()));
+    let context = tauri::generate_context!();
+    install_startup_panic_hook(&context.config().identifier, Arc::clone(&log_redactions));
     let logger_redactions = Arc::clone(&log_redactions);
     let logger = tauri_plugin_log::Builder::new()
         .level(log::LevelFilter::Info)
@@ -1455,6 +1476,7 @@ pub fn run() {
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .invoke_handler(tauri::generate_handler![request, send_lazy, cancel_request])
         .setup(|app| {
+            log::info!("Starting application setup for {}", app.config().identifier);
             if let Err(error) = proxy::configure(app.handle()) {
                 log::warn!("Could not read the system proxy setting: {error}");
             }
@@ -1477,13 +1499,15 @@ pub fn run() {
                 return Ok(());
             }
             let startup_window = if should_open_update_launcher(app.handle()) { "launcher.html" } else { "index.html" };
+            log::info!("Opening startup window '{startup_window}'");
             if let Err(error) = create_window(app.handle(), startup_window, None) {
                 log::error!("Could not open startup window '{startup_window}': {error}");
                 create_window(app.handle(), "index.html", None)
                     .map_err(|_| std::io::Error::other("Could not open fallback startup window"))?;
             }
+            log::info!("Startup window is ready");
             Ok(())
         })
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("BSManager Tauri failed to start");
 }
