@@ -5,6 +5,7 @@ on:
 
 jobs:
     windows-installer:
+        if: github.ref == 'refs/heads/rewrite/tauri-windows'
         name: Build ${{ matrix.profile }} installer
         runs-on: windows-latest
         strategy:
