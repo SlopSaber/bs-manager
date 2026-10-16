@@ -28,25 +28,23 @@ pub async fn load_version_maps<R: Runtime>(
     window: &WebviewWindow<R>,
     response_channel: Option<&str>,
     version: &Value,
+    persist_metadata: bool,
     cancelled: Arc<AtomicBool>,
 ) -> Result<Value, SerializedError> {
     let _ = tokio::time::timeout(Duration::from_secs(30), crate::song_cache::initialize(app)).await;
     let root = map_folder(app, version)?;
-    if version.is_null() {
-        tokio::fs::create_dir_all(&root).await
-            .map_err(|error| serialized_error(error.to_string(), "MAP_FOLDER_FAILED"))?;
-    }
-    let mut entries = match tokio::fs::read_dir(&root).await {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Value::Null),
-        Err(error) => return Err(serialized_error(error.to_string(), "MAP_FOLDER_FAILED")),
-    };
     let mut folders = Vec::new();
-    while let Some(entry) = entries.next_entry().await
-        .map_err(|error| serialized_error(error.to_string(), "MAP_FOLDER_FAILED"))? {
-        if entry.metadata().await.map(|metadata| metadata.is_dir()).unwrap_or(false) {
-            folders.push(entry.path());
+    match tokio::fs::read_dir(&root).await {
+        Ok(mut entries) => {
+            while let Some(entry) = entries.next_entry().await
+                .map_err(|error| serialized_error(error.to_string(), "MAP_FOLDER_FAILED"))? {
+                if entry.metadata().await.map(|metadata| metadata.is_dir()).unwrap_or(false) {
+                    folders.push(entry.path());
+                }
+            }
         }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(serialized_error(error.to_string(), "MAP_FOLDER_FAILED")),
     }
 
     let total = folders.len() as u64;
@@ -56,7 +54,7 @@ pub async fn load_version_maps<R: Runtime>(
         if cancelled.load(Ordering::Relaxed) {
             return Err(serialized_error("Map listing was cancelled", "REQUEST_CANCELLED"));
         }
-        let map = tokio::task::spawn_blocking(move || load_map_info(&folder)).await
+        let map = tokio::task::spawn_blocking(move || load_map_info_with_metadata(&folder, persist_metadata)).await
             .map_err(|error| serialized_error(error.to_string(), "MAP_LOAD_FAILED"))?;
         match map {
             Ok(Some(map)) => {
@@ -865,6 +863,10 @@ fn managed_map_roots<R: Runtime>(app: &AppHandle<R>) -> Result<Vec<PathBuf>, Ser
 }
 
 fn load_map_info(path: &Path) -> Result<Option<Value>, String> {
+    load_map_info_with_metadata(path, true)
+}
+
+fn load_map_info_with_metadata(path: &Path, persist_metadata: bool) -> Result<Option<Value>, String> {
     let dirname = path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
     let cacheable = !dirname.starts_with(".bsmanager-");
     let cached = cacheable.then(|| crate::map_info_cache::get(dirname)).flatten();
@@ -884,7 +886,7 @@ fn load_map_info(path: &Path) -> Result<Option<Value>, String> {
         }
         (map_info, hash)
     };
-    let metadata = load_or_create_metadata(path)?;
+    let metadata = load_or_create_metadata(path, persist_metadata)?;
     let song_filename = map_info.get("songFilename").and_then(Value::as_str)
         .ok_or_else(|| "Map song filename is missing".to_owned())?;
     let cover_filename = map_info.get("coverImageFilename").and_then(Value::as_str)
@@ -1038,15 +1040,17 @@ fn safe_child(root: &Path, relative: &str) -> Result<PathBuf, String> {
     Ok(root.join(relative))
 }
 
-fn load_or_create_metadata(path: &Path) -> Result<Value, String> {
+fn load_or_create_metadata(path: &Path, persist: bool) -> Result<Value, String> {
     let metadata_path = path.join(METADATA_FILE);
     if metadata_path.is_file() {
         let contents = fs::read(&metadata_path).map_err(|error| error.to_string())?;
         return serde_json::from_slice(&contents).map_err(|error| error.to_string());
     }
     let metadata = json!({ "addedDate": Local::now().format("%Y-%m-%dT%H:%M:%S%.3f").to_string() });
-    fs::write(&metadata_path, serde_json::to_vec_pretty(&metadata).map_err(|error| error.to_string())?)
-        .map_err(|error| error.to_string())?;
+    if persist {
+        fs::write(&metadata_path, serde_json::to_vec_pretty(&metadata).map_err(|error| error.to_string())?)
+            .map_err(|error| error.to_string())?;
+    }
     Ok(metadata)
 }
 

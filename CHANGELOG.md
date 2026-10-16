@@ -1,4 +1,22 @@
 ## Not released yet ~
+
+## [2.0.0] (unreleased)
+
+### Features
+- Added a Windows Tauri Preview build with separate settings storage and an explicit import of existing BSManager preferences.
+- Updated the bundled Beat Saber version catalog to match upstream through 1.45.3.
+- Added a Preview label to the Preview build's title bar.
+- Loaded custom Beat Saber version colors from the existing library configuration.
+
+### Fixes
+- Fixed the Preview installer writing application resources to its temporary setup folder.
+- Fixed a startup panic when the updater has no configured signing key or endpoint.
+- Fixed a Settings crash when a Linux-only setting is absent on Windows.
+- Re-imported missing legacy static settings once for existing Preview profiles.
+- Fixed migrated last-launched versions being dropped when legacy settings omit Steam and Meta flags.
+- Fixed library relocation failing when Windows junction checks encounter ordinary folders (error 4390).
+- Kept Preview version, map, playlist, and model scans from writing to shared folders while legacy BSManager is open.
+
 [PR Merged since the last release](https://github.com/Zagrios/bs-manager/pulls?q=is%3Apr+is%3Amerged+merged%3A%3E2025-02-03)\
 [PR Merged since the last alpha](https://github.com/Zagrios/bs-manager/pulls?q=is%3Apr+is%3Amerged+merged%3A%3E2025-02-03)
 

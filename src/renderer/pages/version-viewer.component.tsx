@@ -30,6 +30,7 @@ import { BsModsManagerService } from "renderer/services/bs-mods-manager.service"
 import { noop } from "shared/helpers/function.helpers";
 import { useTranslationV2 } from "renderer/hooks/use-translation.hook";
 import { CustomError } from "shared/models/exceptions/custom-error.class";
+import { getOutdatedMods } from "shared/helpers/mods-plan.helpers";
 
 export function VersionViewer() {
 

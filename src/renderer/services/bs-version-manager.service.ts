@@ -141,8 +141,8 @@ export class BSVersionManagerService {
             return !!versions.find(v =>
                 v.BSVersion === version.BSVersion
                 && v.name === version.name
-                && v.steam === version.steam
-                && v.oculus === version.oculus
+                && Boolean(v.steam) === Boolean(version.steam)
+                && Boolean(v.oculus) === Boolean(version.oculus)
             );
         } catch (error) {
             return false;

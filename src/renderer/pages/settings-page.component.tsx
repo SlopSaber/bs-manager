@@ -35,6 +35,7 @@ import { VersionFolderLinkerService } from "renderer/services/version-folder-lin
 import { useService } from "renderer/hooks/use-service.hook";
 import { lastValueFrom } from "rxjs";
 import { BsmException } from "shared/models/bsm-exception.model";
+import { logRenderError } from "renderer";
 import { useObservable } from "renderer/hooks/use-observable.hook";
 import { BsStore } from "shared/models/bs-store.enum";
 import { SteamIcon } from "renderer/components/svgs/icons/steam-icon.component";
@@ -108,6 +109,7 @@ export function SettingsPage() {
     const [hasSteamSession, setHasSteamSession] = useState(false);
     const [hasOculusSession, setHasOculusSession] = useState(false);
     const appVersion = useObservable(() => autoUpdater.getAppVersion());
+    const buildCommitHash = appVersion?.match(/-([0-9a-f]{7,40})$/i)?.[1];
 
     useEffect(() => {
         loadInstallationFolder();
@@ -150,7 +152,12 @@ export function SettingsPage() {
             return;
         }
 
-        await steamDownloader.deleteSteamSession();
+        try {
+            await steamDownloader.deleteSteamSession();
+        } catch (error) {
+            logRenderError("Could not delete Steam session", error);
+            return;
+        }
         notificationService.notifyInfo({
             title: "pages.settings.steam-and-oculus.logout-success",
         });
@@ -616,7 +623,19 @@ export function SettingsPage() {
 
                 <AdvancedSettings />
 
-                <span className="bg-light-main-color-1 dark:bg-main-color-1 rounded-md py-1 px-2 font-bold float-right mb-5">v{appVersion}</span>
+                {buildCommitHash ? (
+                    <button
+                        type="button"
+                        onClick={() => linkOpener.open(`https://github.com/SlopSaber/bs-manager/commit/${buildCommitHash}`)}
+                        title={`View commit ${buildCommitHash} on GitHub`}
+                        aria-label={`Open BSManager commit ${buildCommitHash} on GitHub`}
+                        className="bg-light-main-color-1 dark:bg-main-color-1 rounded-md py-1 px-2 font-bold float-right mb-5 cursor-pointer hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
+                    >
+                        v{appVersion}
+                    </button>
+                ) : (
+                    <span className="bg-light-main-color-1 dark:bg-main-color-1 rounded-md py-1 px-2 font-bold float-right mb-5">v{appVersion}</span>
+                )}
             </div>
             <SupportersView isVisible={showSupporters} setVisible={setShowSupporters} />
         </div>

@@ -188,8 +188,10 @@ export class BsModsManagerService {
 
     public async getVersionModsState(version: BSVersion): Promise<ModsState> {
         try {
-            const available = await lastValueFrom(this.getAvailableMods(version));
-            const installed = await lastValueFrom(this.getInstalledMods(version));
+            const [available, installed]: [BbmFullMod[], BbmModVersion[]] = await Promise.all([
+                lastValueFrom(this.getAvailableMods(version)),
+                lastValueFrom(this.getInstalledMods(version)),
+            ]);
             return getModsState(available ?? [], installed ?? []);
         } catch (e) {
             logRenderError(e);

@@ -185,7 +185,7 @@ Linux Proton routes are intentionally outside this Windows-only rewrite: `linux.
 - [ ] Default download store: Steam, Meta/Oculus, and ask each time.
 - [ ] Theme: dark, light, and operating-system preference.
 - [ ] First and second custom colors, including reset-to-default.
-- [ ] Preview import v3 restores legacy local preferences, launch options, download-store selection, audio level, and dismissal choices; preserves settings already changed in Preview; and refreshes installed versions. Legacy encrypted Meta tokens prompt for login again.
+- [ ] Preview import v4 restores missing legacy static settings and renderer preferences, launch options, download-store selection, audio level, and dismissal choices; preserves settings already changed in Preview; and refreshes installed versions. Last-launched version lookup treats missing store flags as false. Legacy encrypted Meta tokens prompt for login again.
 - [ ] Custom version colors remain available from the shared library `config.cfg` in Preview and Replacement, including Preview while legacy BSManager is open; version, map, playlist, and model scans must not create or rewrite shared library files during that session.
 - [ ] Installation path edit, browse, validation, apply, and move existing installation.
 - [ ] Deep-link selection: all, Maps, Playlists plus `.bplist`, and Models; registration changes persist and uninstall restores only registrations still owned by profile.
@@ -204,7 +204,7 @@ Linux Proton routes are intentionally outside this Windows-only rewrite: `linux.
 - [ ] Mod dependencies, import/install/uninstall, maps and playlists, model operations, search/filter/sort, archives, sharing, caches, and audio previews.
 - [ ] Deep links, `.bplist`, native file drop, playlist drag-and-drop, and external links.
 - [ ] Offline services, corrupt archive, inaccessible destination, interrupted operation, network retry, and app/window closure during a cancellable operation.
-- [ ] Preview first-run and v3 settings import copies configuration only, reuses selected library paths, keeps separate settings, and blocks shared-content mutations while legacy Electron runs. Version colors stay in shared library `config.cfg`; Preview scans read it without writing or creating missing content folders while Electron is open.
+- [ ] Preview first-run and v4 settings import copies configuration only, reuses selected library paths, keeps separate settings, and blocks shared-content mutations while legacy Electron runs. Version colors stay in shared library `config.cfg`; Preview scans read it without writing or creating missing content folders while Electron is open.
 - [ ] Preview Steam password/QR/Steam Guard download works while legacy Electron BSManager remains open, uses a separate staging and final version folder, and resumes an interrupted staged download after Electron closes.
 - [ ] Version catalog begins with the bundled upstream database, refreshes from the upstream URL, caches a valid response, and falls back offline without losing the bundled version list.
 - [ ] Preview installer does not claim existing protocols or file associations; explicit settings claim records prior owner and uninstall restores only while preview remains owner.
@@ -226,5 +226,5 @@ Linux Proton routes are intentionally outside this Windows-only rewrite: `linux.
 
 - [ ] Confirm preview and replacement NSIS install/uninstall, WebView2 bootstrapper, shortcuts, and elevation behavior.
 - [ ] Confirm replacement rollback backup paths and `migration.json` contents before relying on installer recovery.
-- [x] Verified delivered 2.0.0 artifacts against SHA-256 metadata: Preview `c17179ec3d67c3db5f3503671afc5dac08b66ae516f42db59868a1a0b2c0c36c` and Replacement `aa0c5ea60da0fee05819b5b9b67e438a8eddfe967265273e58b3fc56f2c0f36c`; both are unsigned.
+- [x] Verified delivered 2.0.0 artifacts against SHA-256 metadata: Preview `07d6bbd44c1b43094212b0f6636850f693f75a365abe65838bf6af613feff410` and Replacement `0811528e51201bcd8618730bb7358aef51a28c6db6a72819541bcfdc513815ba`; both are unsigned.
 - [x] Confirmed both 2.0.0 NSIS archives contain the Tauri host and Rust helpers; no Electron or Node runtime was found.

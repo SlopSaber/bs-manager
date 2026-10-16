@@ -317,6 +317,11 @@ Function PageLeaveReinstall
     Goto reinst_uninstall
   ${EndIf}
 
+  ; Passive setup updates the existing NSIS installation in place.
+  ${If} $PassiveMode = 1
+    Goto reinst_done
+  ${EndIf}
+
   ; In update mode, always proceeds without uninstalling
   ${If} $UpdateMode = 1
     Goto reinst_done

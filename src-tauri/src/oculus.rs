@@ -176,7 +176,7 @@ async fn download_inner<R: Runtime>(
     let client = crate::proxy::client_builder()
         .connect_timeout(Duration::from_secs(20))
         .timeout(Duration::from_secs(180))
-        .user_agent("BSManager/1.6.0")
+        .user_agent(concat!("BSManager/", env!("CARGO_PKG_VERSION")))
         .build()
         .map_err(|_| serialized_error("Could not initialize the Meta download client", "NETWORK_CLIENT_FAILED"))?;
     let manifest = fetch_manifest(&client, &request.token, &binary_id, &control).await?;

@@ -144,6 +144,7 @@ export interface IpcChannelMapping {
     "window.progression": { request: number, response: void };
     "save-file": { request: { filename?: string; filters?: FileFilter[] }, response: string };
     "current-version": { request: void, response: string };
+    "is-preview-build": { request: void, response: boolean };
     "open-logs": { request: void, response: string };
     "notify-system": { request: SystemNotificationOptions, response: void };
     "view-path-in-explorer": { request: string, response: void };

@@ -21,28 +21,36 @@ function useVersion() {
     const ipcService = useService(IpcService);
 
     const [currentVersion, setCurrentVersion] = useState("");
+    const [isPreviewBuild, setIsPreviewBuild] = useState(false);
     const [latestVersion, setLatestVersion] = useState<UpdateInfo | null>(null);
 
     useEffect(() => {
         Promise.all([
             lastValueFrom(ipcService.sendV2("current-version")),
+            lastValueFrom(ipcService.sendV2("is-preview-build")),
             lastValueFrom(ipcService.sendV2("get-available-update"))
-        ]).then(([ currentVersion, latestVersion ]) => {
+        ]).then(([ currentVersion, isPreviewBuild, latestVersion ]) => {
             setCurrentVersion(currentVersion);
+            setIsPreviewBuild(isPreviewBuild);
             setLatestVersion(latestVersion);
         });
     }, []);
 
-    return { currentVersion, latestVersion };
+    return { currentVersion, isPreviewBuild, latestVersion };
 }
 
-function TitleBarTags({ version, latestVersion }: Readonly<{
+function TitleBarTags({ version, isPreviewBuild, latestVersion }: Readonly<{
     version: string;
+    isPreviewBuild: boolean;
     latestVersion: UpdateInfo | null;
 }>) {
     const t = useTranslationV2();
 
     const previewVersion = (() => {
+        if (isPreviewBuild) {
+            return "Preview";
+        }
+
         if (version.toLowerCase().includes("alpha")) {
             return "ALPHA";
         }
@@ -56,7 +64,7 @@ function TitleBarTags({ version, latestVersion }: Readonly<{
 
     return <>
         {previewVersion &&
-            <span className="bg-main-color-1 text-white dark:text-black dark:bg-white rounded-full ml-1 text-[10px] italic px-1 uppercase h-3.5 font-bold">
+            <span className="bg-main-color-1 text-white dark:text-black dark:bg-white rounded-full ml-1 text-[10px] italic px-1 h-3.5 font-bold">
                 {previewVersion}
             </span>
         }
@@ -126,7 +134,7 @@ export default function TitleBar({ template = "index.html" }: { template: AppWin
 
     const volume = useObservable(() => audio.volume$, audio.volume);
     const color = useThemeColor("first-color");
-    const { currentVersion, latestVersion } = useVersion();
+    const { currentVersion, isPreviewBuild, latestVersion } = useVersion();
 
     const [maximized, setMaximized] = useState(false);
 
@@ -171,7 +179,7 @@ export default function TitleBar({ template = "index.html" }: { template: AppWin
                 <div id="drag-region" data-tauri-drag-region className="grow basis-0 h-full">
                     <div id="window-title" className="pl-1">
                         <span className="text-gray-800 dark:text-gray-100 font-bold text-xs italic">BSManager</span>
-                        <TitleBarTags version={currentVersion} latestVersion={latestVersion} />
+                        <TitleBarTags version={currentVersion} isPreviewBuild={isPreviewBuild} latestVersion={latestVersion} />
                     </div>
                 </div>
                 <div id="window-controls" className="h-full flex shrink-0 items-center">

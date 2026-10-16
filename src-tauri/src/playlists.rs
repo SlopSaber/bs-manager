@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fs::{self, File},
     io,
     path::{Path, PathBuf},
@@ -45,12 +45,13 @@ pub async fn get_version_playlists<R: Runtime>(
 ) -> Result<Value, SerializedError> {
     let _ = tokio::time::timeout(Duration::from_secs(15), crate::song_cache::initialize(app)).await;
     let folder = playlist_folder(app, version)?;
-    tokio::fs::create_dir_all(&folder).await
-        .map_err(|error| serialized_error(error.to_string(), "PLAYLIST_PATH_FAILED"))?;
     let folder_for_scan = folder.clone();
-    let files = tokio::task::spawn_blocking(move || playlist_files(&folder_for_scan)).await
-        .map_err(|error| serialized_error(error.to_string(), "PLAYLIST_LIST_FAILED"))?
-        .map_err(|error| serialized_error(error.to_string(), "PLAYLIST_LIST_FAILED"))?;
+    let files = match tokio::task::spawn_blocking(move || playlist_files(&folder_for_scan)).await
+        .map_err(|error| serialized_error(error.to_string(), "PLAYLIST_LIST_FAILED"))? {
+        Ok(files) => files,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Vec::new(),
+        Err(error) => return Err(serialized_error(error.to_string(), "PLAYLIST_LIST_FAILED")),
+    };
     let total = files.len() as u64;
     let mut playlists = Vec::new();
     emit_list_progress(window, response_channel, 0, total, json!([]))?;
@@ -273,6 +274,24 @@ async fn download_playlist_content<R: Runtime>(
     let total = songs.len() as u64;
     let mut current = 0_u64;
     let mut downloaded_maps = Vec::new();
+    let ignored_hashes = ignore_hashes.iter().map(|hash| hash.to_ascii_lowercase()).collect::<HashSet<_>>();
+    let hashes = songs.iter().filter_map(|song| {
+        song.get("hash").or_else(|| song.get("levelid")).and_then(Value::as_str).and_then(find_hash)
+    }).map(|hash| hash.to_ascii_lowercase()).filter(|hash| !ignored_hashes.contains(hash)).collect::<HashSet<_>>();
+    let prefetched = if hashes.is_empty() {
+        HashMap::new()
+    } else {
+        match crate::beat_saver::dispatch("bsv-get-map-details-from-hashs", &json!(hashes.iter().collect::<Vec<_>>())).await {
+            Ok(result) => result.as_array().into_iter().flatten().filter_map(|map| {
+                map.pointer("/versions/0/hash").and_then(Value::as_str)
+                    .map(|hash| (hash.to_ascii_lowercase(), map.clone()))
+            }).collect(),
+            Err(error) => {
+                log::warn!("Could not prefetch playlist map details: {}", error.message);
+                HashMap::new()
+            }
+        }
+    };
     let mut progression_data = json!({
         "downloadedMaps": downloaded_maps,
         "currentDownload": Value::Null,
@@ -284,12 +303,12 @@ async fn download_playlist_content<R: Runtime>(
             return Err(serialized_error("Playlist download was cancelled", "REQUEST_CANCELLED"));
         }
         let song_hash = song.get("hash").and_then(Value::as_str).and_then(find_hash);
-        if song_hash.as_ref().is_some_and(|hash| ignore_hashes.iter().any(|ignored| ignored.eq_ignore_ascii_case(hash))) {
+        if song_hash.as_ref().is_some_and(|hash| ignored_hashes.contains(&hash.to_ascii_lowercase())) {
             current += 1;
             emit_download_progress(window, response_channel, current, total, progression_data.clone())?;
             continue;
         }
-        let detail = playlist_song_map_detail(&song).await;
+        let detail = playlist_song_map_detail(&song, &prefetched).await;
         if let Some(detail) = detail {
             let result = maps::download_map(app, &json!({ "map": detail, "version": version }), cancelled.clone()).await;
             match result {
@@ -307,8 +326,9 @@ async fn download_playlist_content<R: Runtime>(
     Ok((details, downloaded_maps))
 }
 
-async fn playlist_song_map_detail(song: &Value) -> Option<Value> {
+async fn playlist_song_map_detail(song: &Value, prefetched: &HashMap<String, Value>) -> Option<Value> {
     if let Some(hash) = song.get("hash").and_then(Value::as_str).and_then(find_hash) {
+        if let Some(map) = prefetched.get(&hash.to_ascii_lowercase()) { return Some(map.clone()); }
         if let Ok(result) = crate::beat_saver::dispatch("bsv-get-map-details-from-hashs", &json!([hash])).await {
             if let Some(map) = result.as_array().and_then(|maps| maps.first()) { return Some(map.clone()); }
         }
@@ -317,6 +337,7 @@ async fn playlist_song_map_detail(song: &Value) -> Option<Value> {
         if let Ok(map) = crate::beat_saver::dispatch("bsv-get-map-details-by-id", &json!(key)).await { return Some(map); }
     }
     if let Some(hash) = song.get("levelid").and_then(Value::as_str).and_then(find_hash) {
+        if let Some(map) = prefetched.get(&hash.to_ascii_lowercase()) { return Some(map.clone()); }
         if let Ok(result) = crate::beat_saver::dispatch("bsv-get-map-details-from-hashs", &json!([hash])).await {
             if let Some(map) = result.as_array().and_then(|maps| maps.first()) { return Some(map.clone()); }
         }

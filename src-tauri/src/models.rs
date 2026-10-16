@@ -4,7 +4,7 @@ use std::{
     io::Read,
     path::{Path, PathBuf},
     sync::{Arc, Mutex, OnceLock, atomic::{AtomicBool, Ordering}},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use futures_util::StreamExt;
@@ -46,8 +46,12 @@ pub async fn export_models<R: Runtime>(
     } else {
         for kind in ["avatar", "bloq", "platform", "saber"] {
             let root = model_folder(app, kind, version)?;
-            tokio::fs::create_dir_all(&root).await
-                .map_err(|error| serialized_error(error.to_string(), "MODEL_PATH_FAILED"))?;
+            match tokio::fs::metadata(&root).await {
+                Ok(metadata) if metadata.is_dir() => {}
+                Ok(_) => continue,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(serialized_error(error.to_string(), "MODEL_PATH_FAILED")),
+            }
             let scan_root = root.clone();
             let kind = kind.to_owned();
             let mut found = tokio::task::spawn_blocking(move || collect_model_files(&scan_root))
@@ -195,19 +199,21 @@ pub async fn get_version_models<R: Runtime>(
         .ok_or_else(|| serialized_error("Model type is invalid", "INVALID_MODEL"))?;
     let version = args.get("version").filter(|version| !version.is_null());
     let folder = model_folder(app, kind, version)?;
-    tokio::fs::create_dir_all(&folder).await
-        .map_err(|error| serialized_error(error.to_string(), "MODEL_PATH_FAILED"))?;
-    let mut entries = tokio::fs::read_dir(&folder).await
-        .map_err(|error| serialized_error(error.to_string(), "MODEL_PATH_FAILED"))?;
     let extension = model_extension(kind)?;
     let mut paths = Vec::new();
-    while let Some(entry) = entries.next_entry().await
-        .map_err(|error| serialized_error(error.to_string(), "MODEL_PATH_FAILED"))? {
-        let file_type = entry.file_type().await
-            .map_err(|error| serialized_error(error.to_string(), "MODEL_PATH_FAILED"))?;
-        if file_type.is_file() && entry.path().extension().and_then(|ext| ext.to_str()) == Some(extension.trim_start_matches('.')) {
-            paths.push(entry.path());
+    match tokio::fs::read_dir(&folder).await {
+        Ok(mut entries) => {
+            while let Some(entry) = entries.next_entry().await
+                .map_err(|error| serialized_error(error.to_string(), "MODEL_PATH_FAILED"))? {
+                let file_type = entry.file_type().await
+                    .map_err(|error| serialized_error(error.to_string(), "MODEL_PATH_FAILED"))?;
+                if file_type.is_file() && entry.path().extension().and_then(|ext| ext.to_str()) == Some(extension.trim_start_matches('.')) {
+                    paths.push(entry.path());
+                }
+            }
         }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(serialized_error(error.to_string(), "MODEL_PATH_FAILED")),
     }
     let total = paths.len() as u64;
     emit_model_progress(window, response_channel, 0, total, None)?;
@@ -313,7 +319,7 @@ async fn download_model_file<R: Runtime>(
                 attempt.follow()
             }
         }))
-        .user_agent("BSManager/1.6.0")
+        .user_agent(concat!("BSManager/", env!("CARGO_PKG_VERSION")))
         .build()
         .map_err(|error| serialized_error(error.to_string(), "MODEL_DOWNLOAD_CLIENT_FAILED"))?;
     let response = client.get(download_url).send().await
@@ -325,6 +331,7 @@ async fn download_model_file<R: Runtime>(
         .map_err(|error| serialized_error(error.to_string(), "MODEL_DOWNLOAD_FAILED"))?;
     let mut hasher = md5::Context::new();
     let mut current = 0_u64;
+    let mut last_progress_at = Instant::now();
     if let Err(error) = emit_download_progress(window, response_channel, 0, total, &destination, Value::Null) {
         drop(output);
         let _ = tokio::fs::remove_file(&staging).await;
@@ -351,10 +358,13 @@ async fn download_model_file<R: Runtime>(
         }
         hasher.consume(&chunk);
         current = current.saturating_add(chunk.len() as u64);
-        if let Err(error) = emit_download_progress(window, response_channel, current, total, &destination, Value::Null) {
-            drop(output);
-            let _ = tokio::fs::remove_file(&staging).await;
-            return Err(error);
+        if last_progress_at.elapsed() >= Duration::from_millis(100) {
+            if let Err(error) = emit_download_progress(window, response_channel, current, total, &destination, Value::Null) {
+                drop(output);
+                let _ = tokio::fs::remove_file(&staging).await;
+                return Err(error);
+            }
+            last_progress_at = Instant::now();
         }
     }
     if let Err(error) = output.flush().await {
@@ -623,7 +633,7 @@ async fn query_models(query: &Value) -> Result<Value, SerializedError> {
     let client = crate::proxy::client_builder()
         .connect_timeout(Duration::from_secs(15))
         .timeout(Duration::from_secs(45))
-        .user_agent("BSManager/1.6.0")
+        .user_agent(concat!("BSManager/", env!("CARGO_PKG_VERSION")))
         .build()
         .map_err(|error| serialized_error(error.to_string(), "MODEL_SABER_CLIENT_FAILED"))?;
     let mut parameters = Vec::<(String, String)>::new();

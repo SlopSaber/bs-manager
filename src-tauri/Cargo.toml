@@ -1,6 +1,6 @@
 [package]
 name = "bs-manager-tauri"
-version = "1.6.0"
+version = "2.0.0"
 description = "BSManager Windows preview"
 authors = ["BSManager contributors"]
 edition = "2024"

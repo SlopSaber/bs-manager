@@ -40,7 +40,7 @@ const INSTALL_FOLDER: &str = "BSManager";
 const LEGACY_APP_DIRECTORY: &str = "bs-manager";
 const PREVIEW_IMPORT_MARKER: &str = "preview-legacy-settings-import";
 const PREVIEW_RENDERER_IMPORT_MARKER: &str = "preview-renderer-settings-import";
-const PREVIEW_RENDERER_IMPORT_VERSION: u64 = 3;
+const PREVIEW_RENDERER_IMPORT_VERSION: u64 = 4;
 const MAX_UPDATE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
 #[derive(Default)]
@@ -655,6 +655,7 @@ async fn handle_request<R: Runtime>(
         steam::stop_download(app);
     }
     let version_scan = channel == "bs-version.installed-versions";
+    let map_scan = channel == "load-version-maps";
     let mutates_library = matches!(channel,
         "import-version" | "download-bs-version" | "auto-download-bs-version" | "download-bs-version-qr" |
         "bs-oculus-download" | "bs-version.edit" | "bs-version.clone" | "bs.uninstall" |
@@ -666,7 +667,8 @@ async fn handle_request<R: Runtime>(
     ) || (channel == "bs-installer.set-install-path" && args.get("move").and_then(Value::as_bool) == Some(true));
     let mut parallel_steam_download = false;
     let mut version_scan_writeback = version_scan;
-    if app.config().identifier == "io.bsmanager.bsmanager.preview" && (mutates_library || version_scan) {
+    let mut map_scan_writeback = map_scan;
+    if app.config().identifier == "io.bsmanager.bsmanager.preview" && (mutates_library || version_scan || map_scan) {
         let legacy_running = windows_integration::legacy_manager_running().await?;
         parallel_steam_download = legacy_running
             && matches!(channel, "download-bs-version" | "auto-download-bs-version" | "download-bs-version-qr")
@@ -681,8 +683,12 @@ async fn handle_request<R: Runtime>(
         if legacy_running && version_scan {
             version_scan_writeback = false;
         }
+        // Map discovery writes metadata.json into custom-song folders and can create the scanned folder.
+        if legacy_running && map_scan {
+            map_scan_writeback = false;
+        }
     }
-    let writes_library = mutates_library || version_scan_writeback;
+    let writes_library = mutates_library || version_scan_writeback || map_scan_writeback;
     let _operation_locks = if writes_library {
         let mut roots = vec![install_directory(app)
             .map_err(|error| serialized_error(error, "INSTALL_PATH_FAILED"))?];
@@ -723,6 +729,15 @@ async fn handle_request<R: Runtime>(
         }
         "stop-download-bs-version" => Ok(steam::stop_download(app)),
         "send-input-bs-download" => Ok(steam::send_input(app, &args)),
+        "delete-steam-session" => {
+            if window.label() != "main" {
+                return Err(serialized_error("Steam session controls are only available in the main window", "WINDOW_NOT_ALLOWED"));
+            }
+            let username = args.as_str().filter(|username| !username.trim().is_empty())
+                .ok_or_else(|| serialized_error("Steam username is required", "INVALID_SESSION"))?;
+            steam::delete_session(app, username).await?;
+            Ok(Value::Null)
+        }
         "login-with-meta" => {
             if window.label() != "main" {
                 return Err(serialized_error("Meta login is only available in the main window", "WINDOW_NOT_ALLOWED"));
@@ -766,7 +781,15 @@ async fn handle_request<R: Runtime>(
         "bsv-search-map" | "bsv-get-map-details-from-hashs" | "bsv-get-map-details-by-id" |
         "bsv-search-playlist" | "bsv-get-playlist-details-by-id" => beat_saver::dispatch(channel, &args).await,
         "get-maps-info-from-cache" => beat_saver::get_map_details_from_cache(app, &args).await,
-        "load-version-maps" => maps::load_version_maps(app, window, response_channel, &args, cancelled).await,
+        "load-version-maps" => {
+            if map_scan_writeback {
+                let app_state = app.state::<AppState>();
+                let _operation = app_state.library_operation.lock().await;
+                maps::load_version_maps(app, window, response_channel, &args, true, cancelled).await
+            } else {
+                maps::load_version_maps(app, window, response_channel, &args, false, cancelled).await
+            }
+        }
         "delete-maps" => {
             let app_state = app.state::<AppState>();
             let _operation = app_state.library_operation.lock().await;
@@ -986,6 +1009,7 @@ async fn handle_request<R: Runtime>(
             Ok(Value::Null)
         }
         "bs-version.get-version-dict" => versions::get_version_catalog(app, window, &args, response_channel, cancelled).await,
+        "is-preview-build" => Ok(json!(app.config().identifier == "io.bsmanager.bsmanager.preview")),
         "bs-version.installed-versions" => {
             let app_state = app.state::<AppState>();
             let _operation = app_state.library_operation.lock().await;

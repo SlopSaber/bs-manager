@@ -485,11 +485,21 @@ async fn uninstall_all_mods<R: Runtime>(
     let installed = get_installed_mods(app, version, &cancelled).await?.as_array().cloned().unwrap_or_default();
     let mods = installed.into_iter().filter_map(|installed| {
         let mod_id = installed.get("modId")?;
-        available.iter().find(|available| available.pointer("/mod/id") == Some(mod_id))
-            .cloned().or_else(|| {
-                let name = installed.get("name")?.as_str()?;
-                Some(json!({ "mod": { "name": name }, "version": installed }))
-            })
+        if let Some(available) = available.iter().find(|available| available.pointer("/mod/id") == Some(mod_id)) {
+            return Some(available.clone());
+        }
+
+        let display_name = installed.get("name").and_then(Value::as_str).map(str::to_owned)
+            .or_else(|| installed.get("contentHashes").and_then(Value::as_array).and_then(|hashes| {
+                hashes.iter().find_map(|hash| {
+                    let path = hash.get("path")?.as_str()?;
+                    let filename = path.rsplit(|character| character == '/' || character == '\\').next()?;
+                    let is_dll = filename.to_ascii_lowercase().ends_with(".dll");
+                    is_dll.then(|| filename[..filename.len() - 4].to_owned())
+                })
+            }))
+            .unwrap_or_else(|| format!("Unknown mod ({mod_id})"));
+        Some(json!({ "mod": { "name": display_name }, "version": installed }))
     }).collect::<Vec<_>>();
     let root = versions::version_path(app, version)?;
     let total = mods.len() as u64;

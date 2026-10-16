@@ -328,6 +328,15 @@ pub fn send_input<R: Runtime>(app: &AppHandle<R>, args: &Value) -> Value {
     json!(sent)
 }
 
+pub async fn delete_session<R: Runtime>(app: &AppHandle<R>, username: &str) -> Result<(), SerializedError> {
+    let path = session_path(app, username).await?;
+    match tokio::fs::remove_file(path).await {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(serialized_error(error.to_string(), "SESSION_STORAGE_FAILED")),
+    }
+}
+
 pub fn protect_secret(value: &[u8]) -> io::Result<Vec<u8>> {
     dpapi::protect(value)
 }

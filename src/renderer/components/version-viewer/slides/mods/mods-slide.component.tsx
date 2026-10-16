@@ -23,7 +23,7 @@ import { ModsGridStatus } from "shared/models/mods/mod-ipc.model";
 import { BsmLink } from "renderer/components/shared/bsm-link.component";
 import { DISCORD_URL, GITHUB_URL } from "shared/constants";
 import { ModsVersionCompareModal } from "renderer/components/modal/modal-types/mods/mods-version-compare-modal.component";
-import { getDefaultSelectedMods, getModsToInstall, ModsState } from "shared/helpers/mods-plan.helpers";
+import { EMPTY_MODS_STATE, getDefaultSelectedMods, getModsToInstall, ModsState } from "shared/helpers/mods-plan.helpers";
 
 export type ModsSlideRef = {
     loadMods: () => Promise<void>;
@@ -54,6 +54,9 @@ export const ModsSlide = forwardRef<ModsSlideRef, Props>(({ version, isActive, o
 
     const downloadRef = useRef(null);
     const [downloadWith, setDownloadWidth] = useState(0);
+
+    const modsAvailable = useMemo(() => modsState && modsToCategoryMap(modsState.mods), [modsState]);
+    const modsInstalled = useMemo(() => modsState && modsToCategoryMap(modsState.installed), [modsState]);
 
     const modsAvailable = useMemo(() => modsState && modsToCategoryMap(modsState.mods), [modsState]);
     const modsInstalled = useMemo(() => modsState && modsToCategoryMap(modsState.installed), [modsState]);
@@ -93,7 +96,7 @@ export const ModsSlide = forwardRef<ModsSlideRef, Props>(({ version, isActive, o
             return Promise.resolve();
         }
 
-        const modsToInstall = getModsToInstall(modsState, modsSelected, { reinstall: reinstallAll });
+        const modsToInstall = getModsToInstall(modsState ?? EMPTY_MODS_STATE, modsSelected, { reinstall: reinstallAll });
 
         if (!modsToInstall.length) {
             notification.notifyInfo({ title: "pages.version-viewer.mods.notifications.all-mods-already-installed.title", desc: "pages.version-viewer.mods.notifications.all-mods-already-installed.description" });
