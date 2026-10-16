@@ -1,7 +1,7 @@
-use std::{collections::HashSet, fs, io, path::{Component, Path, PathBuf}, sync::{Arc, atomic::{AtomicBool, Ordering}}};
+use std::{collections::HashSet, fs, io, path::{Component, Path, PathBuf}, sync::{Arc, atomic::{AtomicBool, Ordering}}, time::Duration};
 
 use serde_json::{Map, Value, json};
-use tauri::{AppHandle, Runtime, WebviewWindow};
+use tauri::{AppHandle, Manager, Runtime, WebviewWindow};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use uuid::Uuid;
 
@@ -11,6 +11,8 @@ const INSTANCES_FOLDER: &str = "BSInstances";
 const LIBRARY_CONFIG_FILE: &str = "config.cfg";
 const VERSION_METADATA_FILE: &str = "metadata.config";
 const CUSTOM_VERSIONS_KEY: &str = "custom-versions";
+const VERSION_CATALOG_URL: &str = "https://raw.githubusercontent.com/Zagrios/bs-manager/master/assets/jsons/bs-versions.json";
+const MAX_VERSION_CATALOG_BYTES: usize = 4 * 1024 * 1024;
 
 struct ImportFile {
     source: PathBuf,
@@ -308,6 +310,172 @@ pub fn get_installed_versions<R: Runtime>(app: &AppHandle<R>) -> Result<Value, S
         .map_err(|error| serialized_error(error.to_string(), "VERSION_CONFIG_WRITE_FAILED"))?;
 
     Ok(json!(installed))
+}
+
+pub fn import_legacy_custom_versions<R: Runtime>(app: &AppHandle<R>, serialized: &str) -> Result<usize, SerializedError> {
+    let imported = serde_json::from_str::<Vec<Value>>(serialized)
+        .map_err(|error| serialized_error(format!("Legacy version colors are invalid: {error}"), "SETTINGS_IMPORT_FAILED"))?;
+    let root = super::install_directory(app)
+        .map_err(|error| serialized_error(error, "INSTALL_PATH_FAILED"))?;
+    let config_path = root.join(LIBRARY_CONFIG_FILE);
+    let mut config = read_config(&config_path)
+        .map_err(|error| serialized_error(error.to_string(), "VERSION_CONFIG_READ_FAILED"))?;
+    let mut current = config.get(CUSTOM_VERSIONS_KEY).and_then(Value::as_array).cloned().unwrap_or_default();
+    let mut count = 0;
+
+    for legacy in imported {
+        let Some(version) = legacy.get("BSVersion").and_then(Value::as_str).filter(|value| !value.is_empty()) else { continue };
+        let Some(color) = legacy.get("color").and_then(Value::as_str).filter(|value| !value.is_empty()) else { continue };
+        let name = legacy.get("name").and_then(Value::as_str).filter(|value| !value.is_empty());
+        if let Some(existing) = current.iter_mut().find(|candidate| {
+            candidate.get("BSVersion").and_then(Value::as_str) == Some(version)
+                && candidate.get("name").and_then(Value::as_str) == name
+        }) {
+            if existing.get("color").and_then(Value::as_str).is_none_or(str::is_empty) {
+                if let Some(object) = existing.as_object_mut() {
+                    object.insert("color".to_owned(), json!(color));
+                    count += 1;
+                }
+            }
+            continue;
+        }
+        let mut record = json!({ "BSVersion": version, "color": color });
+        if let Some(name) = name {
+            record.as_object_mut().expect("version color object").insert("name".to_owned(), json!(name));
+        }
+        current.push(record);
+        count += 1;
+    }
+
+    config.insert(CUSTOM_VERSIONS_KEY.to_owned(), Value::Array(current));
+    write_config(&config_path, &config)
+        .map_err(|error| serialized_error(error.to_string(), "VERSION_CONFIG_WRITE_FAILED"))?;
+    Ok(count)
+}
+
+pub async fn get_version_catalog<R: Runtime>(
+    app: &AppHandle<R>,
+    window: &WebviewWindow<R>,
+    args: &Value,
+    response_channel: Option<&str>,
+    cancelled: Arc<AtomicBool>,
+) -> Result<Value, SerializedError> {
+    let bundled = serde_json::from_str::<Value>(super::VERSION_LIBRARY)
+        .map_err(|error| serialized_error(error.to_string(), "VERSION_LIBRARY_READ_FAILED"))?;
+    if !valid_version_catalog(&bundled) {
+        return Err(serialized_error("Bundled Beat Saber version catalog is invalid", "VERSION_LIBRARY_READ_FAILED"));
+    }
+    let cached = read_version_catalog_cache(app).unwrap_or_else(|| bundled.clone());
+    let cached = if catalog_release_date(&bundled) >= catalog_release_date(&cached) { bundled } else { cached };
+    if let Some(channel) = response_channel {
+        crate::emit_response_value(window, Some(channel), cached.clone())?;
+    }
+
+    let refresh = args.get("refresh").and_then(Value::as_bool).unwrap_or(false);
+    if !refresh {
+        return if response_channel.is_some() { Ok(Value::Null) } else { Ok(cached) };
+    }
+    if cancelled.load(Ordering::Relaxed) {
+        return Err(serialized_error("Version catalog refresh was cancelled", "REQUEST_CANCELLED"));
+    }
+
+    let remote = async {
+        let client = crate::proxy::client_builder()
+            .connect_timeout(Duration::from_secs(5))
+            .timeout(Duration::from_secs(15))
+            .build()
+            .map_err(|error| error.to_string())?;
+        let response = tokio::select! {
+            response = client.get(VERSION_CATALOG_URL).send() => response.map_err(|error| error.to_string())?,
+            _ = wait_for_catalog_cancellation(&cancelled) => return Err("cancelled".to_owned()),
+        };
+        if !response.status().is_success() {
+            return Err(format!("Upstream catalog returned HTTP {}", response.status()));
+        }
+        if response.content_length().is_some_and(|size| size > MAX_VERSION_CATALOG_BYTES as u64) {
+            return Err("Upstream catalog is too large".to_owned());
+        }
+        let bytes = tokio::select! {
+            bytes = response.bytes() => bytes.map_err(|error| error.to_string())?,
+            _ = wait_for_catalog_cancellation(&cancelled) => return Err("cancelled".to_owned()),
+        };
+        if bytes.len() > MAX_VERSION_CATALOG_BYTES {
+            return Err("Upstream catalog is too large".to_owned());
+        }
+        let catalog = serde_json::from_slice::<Value>(&bytes).map_err(|error| error.to_string())?;
+        if !valid_version_catalog(&catalog) {
+            return Err("Upstream catalog is empty or invalid".to_owned());
+        }
+        Ok::<Value, String>(catalog)
+    }.await;
+
+    match remote {
+        Ok(catalog) => {
+            if let Err(error) = write_version_catalog_cache(app, &catalog) {
+                log::warn!("Could not cache the upstream Beat Saber version catalog: {}", error.message);
+            }
+            if let Some(channel) = response_channel {
+                crate::emit_response_value(window, Some(channel), catalog)?;
+                Ok(Value::Null)
+            } else {
+                Ok(catalog)
+            }
+        }
+        Err(error) if error == "cancelled" || cancelled.load(Ordering::Relaxed) => {
+            Err(serialized_error("Version catalog refresh was cancelled", "REQUEST_CANCELLED"))
+        }
+        Err(error) => {
+            log::warn!("Could not refresh the upstream Beat Saber version catalog: {error}");
+            if response_channel.is_some() { Ok(Value::Null) } else { Ok(cached) }
+        }
+    }
+}
+
+fn valid_version_catalog(catalog: &Value) -> bool {
+    catalog.as_array().is_some_and(|versions| {
+        !versions.is_empty() && versions.iter().all(|version| {
+            version.get("BSVersion").and_then(Value::as_str).is_some_and(|value| !value.is_empty())
+        })
+    })
+}
+
+fn catalog_release_date(catalog: &Value) -> u64 {
+    catalog.as_array().into_iter().flatten().filter_map(|version| {
+        version.get("ReleaseDate").and_then(Value::as_str).and_then(|date| date.parse::<u64>().ok())
+    }).max().unwrap_or_default()
+}
+
+fn version_catalog_cache_path<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, SerializedError> {
+    app.path().app_config_dir().map(|directory| directory.join("bs-versions.json"))
+        .map_err(|error| serialized_error(error.to_string(), "VERSION_LIBRARY_CACHE_FAILED"))
+}
+
+fn read_version_catalog_cache<R: Runtime>(app: &AppHandle<R>) -> Option<Value> {
+    let path = version_catalog_cache_path(app).ok()?;
+    let bytes = fs::read(path).ok()?;
+    let catalog = serde_json::from_slice::<Value>(&bytes).ok()?;
+    valid_version_catalog(&catalog).then_some(catalog)
+}
+
+fn write_version_catalog_cache<R: Runtime>(app: &AppHandle<R>, catalog: &Value) -> Result<(), SerializedError> {
+    let path = version_catalog_cache_path(app)?;
+    let parent = path.parent().ok_or_else(|| serialized_error("Version catalog cache path is invalid", "VERSION_LIBRARY_CACHE_FAILED"))?;
+    fs::create_dir_all(parent).map_err(|error| serialized_error(error.to_string(), "VERSION_LIBRARY_CACHE_FAILED"))?;
+    let temporary = parent.join(format!("bs-versions.{}.tmp", Uuid::new_v4()));
+    let bytes = serde_json::to_vec_pretty(catalog)
+        .map_err(|error| serialized_error(error.to_string(), "VERSION_LIBRARY_CACHE_FAILED"))?;
+    fs::write(&temporary, bytes).map_err(|error| serialized_error(error.to_string(), "VERSION_LIBRARY_CACHE_FAILED"))?;
+    if let Err(error) = fs::rename(&temporary, &path) {
+        let _ = fs::remove_file(&temporary);
+        return Err(serialized_error(error.to_string(), "VERSION_LIBRARY_CACHE_FAILED"));
+    }
+    Ok(())
+}
+
+async fn wait_for_catalog_cancellation(cancelled: &AtomicBool) {
+    while !cancelled.load(Ordering::Relaxed) {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 }
 
 pub fn version_path<R: Runtime>(app: &AppHandle<R>, version: &Value) -> Result<PathBuf, SerializedError> {

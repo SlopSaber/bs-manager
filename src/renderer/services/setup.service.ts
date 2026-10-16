@@ -67,6 +67,7 @@ export class SetupService {
                     configurationService.importSerializedIfMissing(key, value);
                 }
                 await lastValueFrom(this.ipcService.sendV2("preview.complete-renderer-settings-import"));
+                await this.versionManagerService.refreshInstalledVersions();
             } else {
                 await lastValueFrom(this.ipcService.sendV2("preview.skip-legacy-settings-import"));
             }

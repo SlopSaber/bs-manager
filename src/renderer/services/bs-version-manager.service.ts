@@ -119,6 +119,19 @@ export class BSVersionManagerService {
         return requestPromise;
     }
 
+    public async refreshInstalledVersions(): Promise<BSVersion[]> {
+        const activeRequest = this.installedVersionsRequestPromise;
+        if (activeRequest !== null) {
+            this.installedVersionsRescanQueued = true;
+            try {
+                await activeRequest;
+            } catch {
+                // The follow-up scan below is still useful after a failed initial scan.
+            }
+        }
+        return this.askInstalledVersions();
+    }
+
     public async isVersionInstalled(version: BSVersion): Promise<boolean> {
         try {
             const versions: BSVersion[] = this.installedVersionsRequestPromise !== null

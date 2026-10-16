@@ -40,6 +40,7 @@ const INSTALL_FOLDER: &str = "BSManager";
 const LEGACY_APP_DIRECTORY: &str = "bs-manager";
 const PREVIEW_IMPORT_MARKER: &str = "preview-legacy-settings-import";
 const PREVIEW_RENDERER_IMPORT_MARKER: &str = "preview-renderer-settings-import";
+const PREVIEW_RENDERER_IMPORT_VERSION: u64 = 2;
 const MAX_UPDATE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
 #[derive(Default)]
@@ -166,14 +167,11 @@ fn preview_settings_import_needed<R: Runtime>(app: &AppHandle<R>) -> Result<bool
     }
 
     let settings = read_settings(app)?;
-    if settings.contains_key(PREVIEW_RENDERER_IMPORT_MARKER) {
+    if settings.get(PREVIEW_RENDERER_IMPORT_MARKER).and_then(Value::as_u64)
+        == Some(PREVIEW_RENDERER_IMPORT_VERSION) {
         return Ok(false);
     }
     let has_renderer_settings = legacy_local_storage_path(app)?.join("CURRENT").is_file();
-    if let Some(status) = settings.get(PREVIEW_IMPORT_MARKER).and_then(Value::as_str) {
-        return Ok(status != "skipped" && has_renderer_settings);
-    }
-
     let legacy_path = legacy_settings_path(app)?;
     let has_legacy_settings = match fs::metadata(legacy_path) {
         Ok(metadata) => metadata.is_file(),
@@ -207,7 +205,7 @@ fn import_legacy_settings<R: Runtime>(app: &AppHandle<R>, import: bool) -> Resul
         if !settings.get(PREVIEW_IMPORT_MARKER).and_then(Value::as_str).is_some_and(|status| status == "imported") {
             settings.insert(PREVIEW_IMPORT_MARKER.to_owned(), json!("skipped"));
         }
-        settings.insert(PREVIEW_RENDERER_IMPORT_MARKER.to_owned(), json!("skipped"));
+        settings.insert(PREVIEW_RENDERER_IMPORT_MARKER.to_owned(), json!(PREVIEW_RENDERER_IMPORT_VERSION));
     }
     write_settings(app, &settings)?;
     proxy::set_enabled(settings.get("use-system-proxy").and_then(Value::as_bool).unwrap_or(false));
@@ -219,7 +217,7 @@ fn complete_legacy_renderer_settings_import<R: Runtime>(app: &AppHandle<R>) -> R
         return Err("Legacy renderer settings import is only available in the preview profile".to_owned());
     }
     let mut settings = read_settings(app)?;
-    settings.insert(PREVIEW_RENDERER_IMPORT_MARKER.to_owned(), json!("imported"));
+    settings.insert(PREVIEW_RENDERER_IMPORT_MARKER.to_owned(), json!(PREVIEW_RENDERER_IMPORT_VERSION));
     write_settings(app, &settings)
 }
 
@@ -665,8 +663,13 @@ async fn handle_request<R: Runtime>(
         "download-model" | "one-click-install-model" | "delete-models" |
         "link-version-folder-action" | "relink-all-versions-folders"
     ) || (channel == "bs-installer.set-install-path" && args.get("move").and_then(Value::as_bool) == Some(true));
+    let mut parallel_steam_download = false;
     if app.config().identifier == "io.bsmanager.bsmanager.preview" && mutates_library {
-        if windows_integration::legacy_manager_running().await? {
+        let legacy_running = windows_integration::legacy_manager_running().await?;
+        parallel_steam_download = legacy_running
+            && matches!(channel, "download-bs-version" | "auto-download-bs-version" | "download-bs-version-qr")
+            && args.get("isVerification").and_then(Value::as_bool) != Some(true);
+        if legacy_running && !parallel_steam_download {
             return Err(serialized_error(
                 "Close legacy BSManager before changing shared game or content folders",
                 "LEGACY_MANAGER_RUNNING",
@@ -709,7 +712,7 @@ async fn handle_request<R: Runtime>(
             let _operation = app_state.library_operation.lock().await;
             let qr = channel == "download-bs-version-qr";
             let automatic = channel == "auto-download-bs-version";
-            steam::download(app, window, response_channel, &args, cancelled, qr, automatic).await
+            steam::download(app, window, response_channel, &args, cancelled, qr, automatic, parallel_steam_download).await
         }
         "stop-download-bs-version" => Ok(steam::stop_download(app)),
         "send-input-bs-download" => Ok(steam::send_input(app, &args)),
@@ -935,6 +938,11 @@ async fn handle_request<R: Runtime>(
                 .map_err(|error| serialized_error(format!("Legacy preference reader failed: {error}"), "SETTINGS_IMPORT_FAILED"))?
                 .map_err(|error| serialized_error(error, "SETTINGS_IMPORT_FAILED"))?;
             import_legacy_settings(app, true).map_err(|error| serialized_error(error, "SETTINGS_IMPORT_FAILED"))?;
+            if let Some(custom_versions) = renderer_settings.get("custom-versions") {
+                let imported = versions::import_legacy_custom_versions(app, custom_versions)
+                    .map_err(|error| serialized_error(error.message, "SETTINGS_IMPORT_FAILED"))?;
+                log::info!("Imported {imported} legacy Beat Saber version colors");
+            }
             Ok(json!(renderer_settings))
         }
         "preview.complete-renderer-settings-import" => {
@@ -974,7 +982,7 @@ async fn handle_request<R: Runtime>(
             if key == "use-system-proxy" { proxy::set_enabled(false); }
             Ok(Value::Null)
         }
-        "bs-version.get-version-dict" => serde_json::from_str(VERSION_LIBRARY).map_err(|error| serialized_error(error.to_string(), "VERSION_LIBRARY_READ_FAILED")),
+        "bs-version.get-version-dict" => versions::get_version_catalog(app, window, &args, response_channel, cancelled).await,
         "bs-version.installed-versions" => {
             let app_state = app.state::<AppState>();
             let _operation = app_state.library_operation.lock().await;
@@ -1176,7 +1184,7 @@ async fn run_ipc_route<R: Runtime>(
             log::warn!("Windows Tauri one-way route '{channel}' failed: {}", error.message);
         }
     }
-    ipc_response(&window, &channel, response_id.as_deref(), result, matches!(channel.as_str(), "import-version" | "download-bs-version" | "auto-download-bs-version" | "download-bs-version-qr" | "bs-oculus-download" | "bs-launch.launch" | "download-model" | "get-version-models" | "export-models" | "delete-models" | "load-version-maps" | "delete-maps" | "export-maps" | "bs-maps.import-maps" | "get-version-playlists-details" | "import-playlists" | "delete-playlist" | "export-playlists" | "download-playlist" | "one-click-install-playlist" | "bs-mods.import-mods" | "bs-mods.install-mods" | "bs-mods.uninstall-mods" | "bs-mods.uninstall-all-mods" | "download-update" | "last-downloaded-map"));
+    ipc_response(&window, &channel, response_id.as_deref(), result, matches!(channel.as_str(), "import-version" | "download-bs-version" | "auto-download-bs-version" | "download-bs-version-qr" | "bs-oculus-download" | "bs-launch.launch" | "download-model" | "get-version-models" | "export-models" | "delete-models" | "load-version-maps" | "delete-maps" | "export-maps" | "bs-maps.import-maps" | "get-version-playlists-details" | "import-playlists" | "delete-playlist" | "export-playlists" | "download-playlist" | "one-click-install-playlist" | "bs-mods.import-mods" | "bs-mods.install-mods" | "bs-mods.uninstall-mods" | "bs-mods.uninstall-all-mods" | "download-update" | "last-downloaded-map" | "bs-version.get-version-dict"));
     if should_restart { app.request_restart(); }
 }
 
@@ -1514,7 +1522,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+        .plugin(tauri_plugin_window_state::Builder::default().skip_initial_state("main").build())
         .invoke_handler(tauri::generate_handler![request, send_lazy, cancel_request])
         .setup(|app| {
             log::info!("Starting application setup for {}", app.config().identifier);

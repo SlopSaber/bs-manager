@@ -25,6 +25,7 @@ const PROTOCOL_VERSION: u64 = 1;
 const APP_ID: u32 = 620980;
 const DEPOT_ID: u32 = 620981;
 const MAX_LINE_LENGTH: usize = 128 * 1024;
+const PREVIEW_STAGING_FOLDER: &str = ".bsmanager-preview-steam-downloads";
 
 #[derive(Clone)]
 pub struct SteamControl {
@@ -80,6 +81,7 @@ pub async fn download<R: Runtime>(
     cancelled: Arc<AtomicBool>,
     qr: bool,
     automatic: bool,
+    isolated_parallel_download: bool,
 ) -> Result<Value, SerializedError> {
     let request: DownloadRequest = serde_json::from_value(args.clone())
         .map_err(|error| serialized_error(error.to_string(), "INVALID_DOWNLOAD_REQUEST"))?;
@@ -89,22 +91,40 @@ pub async fn download<R: Runtime>(
         .ok_or_else(|| serialized_error("Beat Saber manifest ID is invalid", "InvalidManifest"))?;
 
     let version_path = versions::version_path(app, &request.bs_version)?;
-    let pending_path = version_path.join(".bs-download").join("pending.json");
-    let pending = fs::read(&pending_path).ok().and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
-    let resumable = pending.as_ref().is_some_and(|pending| {
-        pending.get("depot").and_then(Value::as_str) == Some(DEPOT_ID.to_string().as_str())
-            && pending.get("manifest").and_then(Value::as_str) == Some(manifest.as_str())
-    });
-    let destination = if request.is_verification || resumable {
-        version_path
-    } else {
-        unique_destination(&version_path)
+    let resumable = has_matching_pending(&version_path, &manifest);
+    let staged_resume = if request.is_verification { None } else {
+        find_staged_download(&version_path, &manifest)
+            .map_err(|error| serialized_error(error.to_string(), "DirectoryCreate"))?
     };
+    let (destination, mut final_destination, staged) = if request.is_verification {
+        (version_path.clone(), version_path.clone(), false)
+    } else if isolated_parallel_download {
+        let destination = match staged_resume {
+            Some(path) => path,
+            None => create_staged_download(&version_path)
+                .map_err(|error| serialized_error(error.to_string(), "DirectoryCreate"))?,
+        };
+        (destination, unique_destination(&version_path), true)
+    } else if resumable {
+        (version_path.clone(), version_path.clone(), false)
+    } else if let Some(destination) = staged_resume {
+        (destination, unique_destination(&version_path), true)
+    } else {
+        let destination = unique_destination(&version_path);
+        (destination.clone(), destination, false)
+    };
+    if isolated_parallel_download {
+        log::info!("Starting isolated Steam download while legacy BSManager is running");
+    }
     fs::create_dir_all(destination.parent().ok_or_else(|| serialized_error("Installation path is invalid", "DirectoryCreate"))?)
         .map_err(|error| serialized_error(error.to_string(), "DirectoryCreate"))?;
+    if staged {
+        fs::create_dir_all(&destination)
+            .map_err(|error| serialized_error(error.to_string(), "DirectoryCreate"))?;
+    }
 
     let mut version = request.bs_version.clone();
-    let folder_name = destination.file_name().and_then(|name| name.to_str()).unwrap_or_default();
+    let folder_name = final_destination.file_name().and_then(|name| name.to_str()).unwrap_or_default();
     if version.get("BSVersion").and_then(Value::as_str) != Some(folder_name) {
         version.as_object_mut()
             .ok_or_else(|| serialized_error("Version data is invalid", "InvalidManifest"))?
@@ -112,7 +132,7 @@ pub async fn download<R: Runtime>(
     }
     let version_object = version.as_object_mut()
         .ok_or_else(|| serialized_error("Version data is invalid", "InvalidManifest"))?;
-    version_object.insert("path".to_owned(), json!(destination));
+    version_object.insert("path".to_owned(), json!(final_destination));
     version_object.insert("steam".to_owned(), json!(false));
     version_object.insert("oculus".to_owned(), json!(false));
     version_object.insert("metadata".to_owned(), json!({ "store": "steam", "id": "" }));
@@ -195,7 +215,7 @@ pub async fn download<R: Runtime>(
                             match handle_event(&line, app, window, response_channel, automatic, request.stay || automatic, &mut finished_event).await {
                                 Ok(()) => {}
                                 Err(error) => {
-                                    if error.code != "REQUEST_CANCELLED" {
+                                    if error.code != "REQUEST_CANCELLED" && !cancelled.load(Ordering::Relaxed) {
                                         failure = Some(error);
                                     }
                                     cancelled.store(true, Ordering::Relaxed);
@@ -275,8 +295,13 @@ pub async fn download<R: Runtime>(
         return Err(serialized_error("bs-downloader exited without a completed download", "NotCompleted"));
     };
 
+    if staged {
+        final_destination = finalize_staged_download(&destination, &version_path)
+            .map_err(|error| serialized_error(error.to_string(), "VERSION_MOVE_FAILED"))?;
+    }
+
     let metadata = json!({ "id": Uuid::new_v4().to_string(), "store": "steam" });
-    let metadata_path = destination.join("metadata.config");
+    let metadata_path = final_destination.join("metadata.config");
     fs::write(&metadata_path, serde_json::to_vec_pretty(&metadata).unwrap_or_default())
         .map_err(|error| serialized_error(error.to_string(), "VERSION_METADATA_WRITE_FAILED"))?;
     if let Some(response_channel) = response_channel {
@@ -385,6 +410,90 @@ fn unique_destination(path: &Path) -> PathBuf {
         destination = PathBuf::from(format!("{} ({suffix})", path.display()));
     }
     destination
+}
+
+fn path_exists(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok()
+}
+
+fn has_matching_pending(directory: &Path, manifest: &str) -> bool {
+    let pending_path = directory.join(".bs-download").join("pending.json");
+    fs::read(pending_path).ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .is_some_and(|pending| {
+            pending.get("depot").and_then(Value::as_str) == Some("620981")
+                && pending.get("manifest").and_then(Value::as_str) == Some(manifest)
+        })
+}
+
+fn staging_root(version_path: &Path) -> io::Result<PathBuf> {
+    let parent = version_path.parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Installation path is invalid"))?;
+    let root = parent.join(PREVIEW_STAGING_FOLDER);
+    match fs::symlink_metadata(&root) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+            Err(io::Error::new(io::ErrorKind::InvalidData, "Steam download staging path is not a directory"))
+        }
+        Ok(_) => Ok(root),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(root),
+        Err(error) => Err(error),
+    }
+}
+
+fn find_staged_download(version_path: &Path, manifest: &str) -> io::Result<Option<PathBuf>> {
+    let root = staging_root(version_path)?;
+    let entries = match fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    for entry in entries {
+        let entry = entry?;
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path)?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            continue;
+        }
+        if has_matching_pending(&path, manifest) {
+            return Ok(Some(path));
+        }
+    }
+    Ok(None)
+}
+
+fn create_staged_download(version_path: &Path) -> io::Result<PathBuf> {
+    let root = staging_root(version_path)?;
+    fs::create_dir_all(&root)?;
+    for _ in 0..16 {
+        let directory = root.join(Uuid::new_v4().to_string());
+        match fs::create_dir(&directory) {
+            Ok(()) => return Ok(directory),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(io::Error::new(io::ErrorKind::AlreadyExists, "Could not reserve a Steam download staging folder"))
+}
+
+fn finalize_staged_download(staging: &Path, requested_destination: &Path) -> io::Result<PathBuf> {
+    for suffix in 0..1024 {
+        let destination = if suffix == 0 {
+            requested_destination.to_path_buf()
+        } else {
+            PathBuf::from(format!("{} ({suffix})", requested_destination.display()))
+        };
+        match fs::rename(staging, &destination) {
+            Ok(()) => {
+                if let Some(root) = staging.parent() {
+                    let _ = fs::remove_dir(root);
+                }
+                return Ok(destination);
+            }
+            Err(_) if path_exists(&destination) => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(io::Error::new(io::ErrorKind::AlreadyExists, "Could not choose a unique Beat Saber version folder"))
 }
 
 fn downloader_path<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, SerializedError> {

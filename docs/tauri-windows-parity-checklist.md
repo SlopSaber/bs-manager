@@ -36,6 +36,7 @@ Review each route's payload shape, result/error behavior, progress sequence, can
 - [ ] `bs-installer.set-install-path`
 - [ ] `preview.legacy-settings-import-needed`
 - [ ] `preview.import-legacy-settings`
+- [ ] `preview.complete-renderer-settings-import`
 - [ ] `preview.skip-legacy-settings-import`
 
 ### Launch and shortcuts
@@ -167,7 +168,7 @@ Linux Proton routes are intentionally outside this Windows-only rewrite: `linux.
 
 ## Windows and auxiliary windows
 
-- [ ] Main window: 1080×720 default, 900×500 minimum, frameless controls, resize/maximize/restore, drag region, startup focus.
+- [ ] Main window: opens at 1080×720 on each new main window, 900×500 minimum, frameless controls, resize/maximize/restore, drag region, startup focus.
 - [ ] Update launcher: 380×500 fixed; update state, download progress, cancel, close, and reopen behavior.
 - [ ] Map one-click window: 350×400 fixed; deep-link payload and installation result.
 - [ ] Playlist one-click window: 350×400 fixed; deep-link and `.bplist` payloads.
@@ -183,6 +184,7 @@ Linux Proton routes are intentionally outside this Windows-only rewrite: `linux.
 - [ ] Default download store: Steam, Meta/Oculus, and ask each time.
 - [ ] Theme: dark, light, and operating-system preference.
 - [ ] First and second custom colors, including reset-to-default.
+- [ ] Preview import v2 restores legacy local preferences and custom version colors, preserves settings already changed in Preview, and refreshes the installed-version list.
 - [ ] Installation path edit, browse, validation, apply, and move existing installation.
 - [ ] Deep-link selection: all, Maps, Playlists plus `.bplist`, and Models; registration changes persist and uninstall restores only registrations still owned by profile.
 - [ ] Language selection and persistence.
@@ -200,7 +202,9 @@ Linux Proton routes are intentionally outside this Windows-only rewrite: `linux.
 - [ ] Mod dependencies, import/install/uninstall, maps and playlists, model operations, search/filter/sort, archives, sharing, caches, and audio previews.
 - [ ] Deep links, `.bplist`, native file drop, playlist drag-and-drop, and external links.
 - [ ] Offline services, corrupt archive, inaccessible destination, interrupted operation, network retry, and app/window closure during a cancellable operation.
-- [ ] Preview first-run settings import copies configuration only, reuses selected library paths, uses separate settings, and blocks mutation while legacy Electron runs.
+- [ ] Preview first-run and v2 settings import copies configuration only, restores version colors, reuses selected library paths, uses separate settings, and blocks shared-content mutations while legacy Electron runs.
+- [ ] Preview Steam password/QR/Steam Guard download works while legacy Electron BSManager remains open, uses a separate staging and final version folder, and resumes an interrupted staged download after Electron closes.
+- [ ] Version catalog begins with the bundled upstream database, refreshes from the upstream URL, caches a valid response, and falls back offline without losing the bundled version list.
 - [ ] Preview installer does not claim existing protocols or file associations; explicit settings claim records prior owner and uninstall restores only while preview remains owner.
 - [ ] Preview and Replacement claim shared protocols and `.bplist`, then uninstall in both orders; remaining registrations never point at a removed profile, and original handlers return when stack has no live profile owner.
 - [ ] Replacement detects legacy install, backs up settings and registrations, aborts on running app or uninstall failure, preserves game data, and restores on rollback.

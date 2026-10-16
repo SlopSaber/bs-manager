@@ -22,6 +22,9 @@ const PREFERENCE_KEYS: &[&str] = &[
     "playlist-sort-order",
     "map-sort-order",
     "pinned-launch-mods",
+    "custom-versions",
+    "not-remind-oneclick",
+    "STEAM-USERNAME",
 ];
 
 pub fn read_preferences(source: &Path, cache_root: &Path) -> Result<BTreeMap<String, String>, String> {
