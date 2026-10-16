@@ -7,6 +7,7 @@ This checklist distinguishes source coverage from verified behavior. Route entri
 Review each route's payload shape, result/error behavior, progress sequence, cancellation where applicable, and effects on the correct library/profile. One-way routes should be checked for their expected side effects and error logging.
 
 - [x] Static source comparison on 2026-10-16 found all 104 Windows routes from the baseline shared IPC mapping, including the one-shot `shortcut-launch-options` listener, and all 3 direct `ipcMain.on` event routes in the Rust dispatcher. Three Linux-only routes are out of scope. Three Tauri-only replacement renderer-import routes are added separately. Rust emits `window-arguments`; the renderer bridges native drops as `desktop-files-dropped`.
+- [x] Current source audit on 2026-10-16 found all 114 Windows entries in `IpcChannelMapping` as exact arms in `handle_request`; the other 3 typed routes are Linux-only. The dispatcher has 124 distinct arms, including aliases and direct event routes. This proves route-name coverage only; payload, result, progress, cancellation, window scope, and side effects remain subject to the runtime checklist below.
 
 ### Download and authentication
 
