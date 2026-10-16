@@ -1379,6 +1379,9 @@ async fn send_lazy<R: Runtime>(app: AppHandle<R>, window: WebviewWindow<R>, chan
 
 #[tauri::command]
 fn cancel_request<R: Runtime>(app: AppHandle<R>, window: WebviewWindow<R>, request_id: String) -> Result<(), String> {
+    if !is_application_window(window.label()) {
+        return Err(format!("Rejected IPC cancellation from window '{}'", window.label()));
+    }
     let state = app.state::<AppState>();
     let mut requests = state.active_requests.lock().map_err(|_| "Active requests are unavailable".to_owned())?;
     if requests.get(&request_id).is_some_and(|request| request.window_label == window.label()) {
