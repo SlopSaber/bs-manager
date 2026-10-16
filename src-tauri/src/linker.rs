@@ -253,14 +253,72 @@ fn directory_contents_already_shared(source: &Path, destination: &Path) -> io::R
         return Ok(false);
     }
 
+    let is_custom_levels = source.file_name().is_some_and(|name| {
+        name.to_string_lossy().eq_ignore_ascii_case(CUSTOM_LEVELS_FOLDER)
+    });
     for entry in fs::read_dir(source)? {
         let entry = entry?;
         let target = destination.join(entry.file_name());
-        if !path_exists(&target) || !source_path_is_already_shared(&entry.path(), &target)? {
+        let source_entry = entry.path();
+        if !path_exists(&target) {
+            return Ok(false);
+        }
+        let already_shared = if is_custom_levels && is_builtin_map_directory(&source_entry) {
+            builtin_map_contents_match(&source_entry, &target)?
+        } else {
+            source_path_is_already_shared(&source_entry, &target)?
+        };
+        if !already_shared {
             return Ok(false);
         }
     }
     Ok(true)
+}
+
+fn is_builtin_map_directory(path: &Path) -> bool {
+    path.file_name().is_some_and(|name| {
+        name.to_string_lossy().to_ascii_lowercase().ends_with(" (built in)")
+    })
+}
+
+fn builtin_map_contents_match(source: &Path, destination: &Path) -> io::Result<bool> {
+    let source_metadata = fs::symlink_metadata(source)?;
+    let destination_metadata = fs::symlink_metadata(destination)?;
+    if is_link(source) || is_link(destination) {
+        return Ok(false);
+    }
+
+    if source_metadata.is_dir() || destination_metadata.is_dir() {
+        if !source_metadata.is_dir() || !destination_metadata.is_dir() {
+            return Ok(false);
+        }
+        for entry in fs::read_dir(source)? {
+            let entry = entry?;
+            let target = destination.join(entry.file_name());
+            if !path_exists(&target) || !builtin_map_contents_match(&entry.path(), &target)? {
+                return Ok(false);
+            }
+        }
+        return Ok(true);
+    }
+
+    if !source_metadata.is_file() || !destination_metadata.is_file()
+        || source_metadata.len() != destination_metadata.len()
+        || source_metadata.permissions().readonly() != destination_metadata.permissions().readonly()
+    {
+        return Ok(false);
+    }
+
+    let is_audio = source.extension().is_some_and(|extension| {
+        let extension = extension.to_string_lossy();
+        ["ogg", "wav", "mp3", "flac", "m4a"]
+            .iter()
+            .any(|audio| extension.eq_ignore_ascii_case(audio))
+    });
+    if is_audio {
+        return Ok(true);
+    }
+    source_path_is_already_shared(source, destination)
 }
 
 fn source_path_is_already_shared(left: &Path, right: &Path) -> io::Result<bool> {
