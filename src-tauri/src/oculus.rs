@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashSet},
     io::{Cursor, Read},
     path::{Component, Path, PathBuf},
     sync::{Arc, atomic::{AtomicBool, Ordering}},
@@ -181,6 +181,29 @@ async fn download_inner<R: Runtime>(
         .map_err(|_| serialized_error("Could not initialize the Meta download client", "NETWORK_CLIENT_FAILED"))?;
     let manifest = fetch_manifest(&client, &request.token, &binary_id, &control).await?;
     let files = manifest.files.into_iter().collect::<Vec<_>>();
+    let mut target_paths = HashSet::with_capacity(files.len());
+    for (name, _) in &files {
+        let relative = safe_manifest_path(name)?;
+        let key = relative.to_string_lossy().replace('\\', "/").to_lowercase();
+        if !target_paths.insert(key) {
+            return Err(serialized_error("Manifest contains colliding Windows file paths", "INVALID_MANIFEST_PATH"));
+        }
+    }
+    for (name, _) in &files {
+        let relative = safe_manifest_path(name)?;
+        let mut parent = PathBuf::new();
+        if let Some(relative_parent) = relative.parent() {
+            for component in relative_parent.components() {
+                if let Component::Normal(part) = component {
+                    parent.push(part);
+                    let key = parent.to_string_lossy().replace('\\', "/").to_lowercase();
+                    if target_paths.contains(&key) {
+                        return Err(serialized_error("Manifest file path conflicts with a folder path", "INVALID_MANIFEST_PATH"));
+                    }
+                }
+            }
+        }
+    }
     let total = files.iter().fold(0_u64, |sum, (_, file)| sum.saturating_add(file.size));
     emit_progress(window, response_channel, 0, total, &version)?;
 
@@ -202,7 +225,8 @@ async fn download_inner<R: Runtime>(
                 let relative = safe_manifest_path(&name)?;
                 let target = destination.join(relative);
                 ensure_safe_parent(&destination, &target).await?;
-                if file_integrity_valid(&target, &file.sha256, file.size).await.unwrap_or(false) {
+                let target_exists = validate_file_target(&target).await?;
+                if target_exists && file_integrity_valid(&target, &file.sha256, file.size).await.unwrap_or(false) {
                     advance_progress(&window, response_channel.as_deref(), &current, file.size, total, &version).await?;
                     return Ok::<(), SerializedError>(());
                 }
@@ -210,27 +234,34 @@ async fn download_inner<R: Runtime>(
                     tokio::fs::create_dir_all(parent).await
                         .map_err(|error| serialized_error(error.to_string(), "DOWNLOAD_PATH_FAILED"))?;
                 }
-                let mut output = tokio::fs::File::create(&target).await
-                    .map_err(|error| serialized_error(error.to_string(), "DOWNLOAD_FILE_FAILED"))?;
-                let mut written = 0_u64;
-                for segment in file.segments {
-                    check_cancelled(&control)?;
-                    let ManifestSegment(_offset, segment_hash, expected_size) = segment;
-                    let compressed = fetch_segment(&client, &token, &binary_id, &segment_hash, &control).await?;
-                    let inflated = tokio::task::spawn_blocking(move || inflate_segment(compressed, expected_size)).await
-                        .map_err(|error| serialized_error(format!("Segment decompression failed: {error}"), "SEGMENT_DECOMPRESSION_FAILED"))??;
-                    output.write_all(&inflated).await
+                let staged = target.with_file_name(format!(".bsmanager-meta-stage-{}", uuid::Uuid::new_v4()));
+                let result = async {
+                    let mut output = tokio::fs::OpenOptions::new().write(true).create_new(true).open(&staged).await
                         .map_err(|error| serialized_error(error.to_string(), "DOWNLOAD_FILE_FAILED"))?;
-                    written = written.saturating_add(inflated.len() as u64);
-                    advance_progress(&window, response_channel.as_deref(), &current, inflated.len() as u64, total, &version).await?;
-                }
-                output.flush().await
-                    .map_err(|error| serialized_error(error.to_string(), "DOWNLOAD_FILE_FAILED"))?;
-                drop(output);
-                if written != file.size || !file_integrity_valid(&target, &file.sha256, file.size).await.unwrap_or(false) {
-                    return Err(serialized_error(format!("File integrity check failed: {name}"), "FILE_INTEGRITY_FAILED"));
-                }
-                Ok(())
+                    let mut written = 0_u64;
+                    for segment in file.segments {
+                        check_cancelled(&control)?;
+                        let ManifestSegment(_offset, segment_hash, expected_size) = segment;
+                        let compressed = fetch_segment(&client, &token, &binary_id, &segment_hash, &control).await?;
+                        let inflated = tokio::task::spawn_blocking(move || inflate_segment(compressed, expected_size)).await
+                            .map_err(|error| serialized_error(format!("Segment decompression failed: {error}"), "SEGMENT_DECOMPRESSION_FAILED"))??;
+                        output.write_all(&inflated).await
+                            .map_err(|error| serialized_error(error.to_string(), "DOWNLOAD_FILE_FAILED"))?;
+                        written = written.saturating_add(inflated.len() as u64);
+                        advance_progress(&window, response_channel.as_deref(), &current, inflated.len() as u64, total, &version).await?;
+                    }
+                    output.flush().await
+                        .map_err(|error| serialized_error(error.to_string(), "DOWNLOAD_FILE_FAILED"))?;
+                    output.sync_all().await
+                        .map_err(|error| serialized_error(error.to_string(), "DOWNLOAD_FILE_FAILED"))?;
+                    drop(output);
+                    if written != file.size || !file_integrity_valid(&staged, &file.sha256, file.size).await.unwrap_or(false) {
+                        return Err(serialized_error(format!("File integrity check failed: {name}"), "FILE_INTEGRITY_FAILED"));
+                    }
+                    replace_download_file(&staged, &target, &control).await
+                }.await;
+                if result.is_err() { let _ = tokio::fs::remove_file(&staged).await; }
+                result
             }
         })
         .buffer_unordered(CONCURRENT_FILES)
@@ -399,10 +430,35 @@ fn safe_manifest_path(name: &str) -> Result<PathBuf, SerializedError> {
         return Err(serialized_error("Manifest contains an invalid file path", "INVALID_MANIFEST_PATH"));
     }
     let path = Path::new(name);
-    if path.is_absolute() || path.components().any(|component| !matches!(component, Component::Normal(_))) {
+    if path.is_absolute() {
         return Err(serialized_error("Manifest contains an unsafe file path", "INVALID_MANIFEST_PATH"));
     }
-    Ok(path.to_path_buf())
+    let mut safe = PathBuf::new();
+    for component in path.components() {
+        let Component::Normal(part) = component else {
+            return Err(serialized_error("Manifest contains an unsafe file path", "INVALID_MANIFEST_PATH"));
+        };
+        let name = part.to_string_lossy();
+        if name.ends_with(' ') || name.ends_with('.')
+            || name.chars().any(|character| matches!(character, '<' | '>' | ':' | '"' | '|' | '?' | '*'))
+            || is_reserved_windows_name(&name)
+        {
+            return Err(serialized_error("Manifest contains an invalid Windows file name", "INVALID_MANIFEST_PATH"));
+        }
+        safe.push(part);
+    }
+    if safe.as_os_str().is_empty() {
+        return Err(serialized_error("Manifest contains an empty file path", "INVALID_MANIFEST_PATH"));
+    }
+    Ok(safe)
+}
+
+fn is_reserved_windows_name(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or_default().trim_end_matches(|character| character == ' ' || character == '.').to_ascii_uppercase();
+    matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$" | "CLOCK$")
+        || ["COM", "LPT"].iter().any(|prefix| {
+            stem.strip_prefix(prefix).is_some_and(|number| number.len() == 1 && matches!(number.as_bytes()[0], b'1'..=b'9'))
+        })
 }
 
 async fn ensure_safe_parent(root: &Path, target: &Path) -> Result<(), SerializedError> {
@@ -426,6 +482,51 @@ async fn ensure_safe_parent(root: &Path, target: &Path) -> Result<(), Serialized
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                 Err(error) => return Err(serialized_error(error.to_string(), "DOWNLOAD_PATH_FAILED")),
             }
+        }
+    }
+    Ok(())
+}
+
+async fn validate_file_target(path: &Path) -> Result<bool, SerializedError> {
+    match tokio::fs::symlink_metadata(path).await {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            Err(serialized_error("Manifest file target cannot be a symbolic link", "INVALID_MANIFEST_PATH"))
+        }
+        Ok(metadata) if metadata.is_dir() => {
+            Err(serialized_error("Manifest file target is a folder", "INVALID_MANIFEST_PATH"))
+        }
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(serialized_error(error.to_string(), "DOWNLOAD_PATH_FAILED")),
+    }
+}
+
+async fn replace_download_file(
+    staged: &Path,
+    target: &Path,
+    control: &OculusControl,
+) -> Result<(), SerializedError> {
+    check_cancelled(control)?;
+    let backup = target.with_file_name(format!(".bsmanager-meta-backup-{}", uuid::Uuid::new_v4()));
+    let had_target = validate_file_target(target).await?;
+    if had_target {
+        tokio::fs::rename(target, &backup).await
+            .map_err(|error| serialized_error(error.to_string(), "DOWNLOAD_FILE_FAILED"))?;
+    }
+    if let Err(error) = tokio::fs::rename(staged, target).await {
+        if had_target {
+            if let Err(restore_error) = tokio::fs::rename(&backup, target).await {
+                return Err(serialized_error(
+                    format!("{}; previous file remains backed up at {}: {}", error, backup.display(), restore_error),
+                    "DOWNLOAD_FILE_FAILED",
+                ));
+            }
+        }
+        return Err(serialized_error(error.to_string(), "DOWNLOAD_FILE_FAILED"));
+    }
+    if had_target {
+        if let Err(error) = tokio::fs::remove_file(&backup).await {
+            log::warn!("Could not remove replaced Meta file backup {}: {error}", backup.display());
         }
     }
     Ok(())
