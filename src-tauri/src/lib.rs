@@ -1426,9 +1426,10 @@ fn install_startup_panic_hook(identifier: &str, redactions: Arc<Mutex<LogRedacti
     let previous_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic_info| {
         let message = panic_info.to_string();
-        let message = redactions.lock()
-            .map(|filters| filters.redact(&message))
-            .unwrap_or(message);
+        let message = match redactions.try_lock() {
+            Ok(filters) => filters.redact(&message),
+            Err(_) => "Panic details suppressed because log redaction state is unavailable".to_owned(),
+        };
         if let Some(directory) = log_path.parent() {
             let _ = fs::create_dir_all(directory);
         }
