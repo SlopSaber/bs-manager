@@ -207,7 +207,8 @@ Linux Proton routes are intentionally outside this Windows-only rewrite: `linux.
 ## Feature and failure scenarios
 
 - [x] Preview settings-import failures are logged and shown as an in-app error notification so a failed import is visible and can be retried on a later launch.
-- [x] Current local Preview executable remains `2.0.0-2b24094b`; its 2026-10-15 log records `steam-session-exists` as `NOT_IMPLEMENTED`. Build `2.0.0-f77b1389` includes the Rust handler, where a missing `username.json` returns `false`.
+- [x] Current local Preview executable remains `2.0.0-2b24094b`; its 2026-10-16 log still records `steam-session-exists` as `NOT_IMPLEMENTED`. Build `2.0.0-f77b1389` includes the Rust handler, where a missing `username.json` returns `false`.
+- [x] Read-only local data audit found legacy `config.json` and renderer LevelDB present; Preview currently points to the same installation folder. The shared library config contains one colored-version record matching a scannable installed folder. This confirms the color source is present; display in the packaged app remains pending.
 - [ ] Install `2.0.0-f77b1389` and confirm Preview startup no longer logs that route error, Steam login state remains stable, and legacy settings import works.
 - [ ] Steam password, QR, Steam Guard, remembered session, resume, CDN failover, verification, progress, input, cancel, and retry.
 - [ ] Meta login cookie capture, remembered session, expired credential, logout, manifest download, decompression, integrity failure, resume, and cancel.
