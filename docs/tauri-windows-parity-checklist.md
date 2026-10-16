@@ -170,6 +170,7 @@ Linux Proton routes are intentionally outside this Windows-only rewrite: `linux.
 
 ## Events and request streams
 
+- [x] `request`, `send_lazy`, and `cancel_request` reject non-application window labels; only the six local app windows pass the Rust guard.
 - [ ] Tauri Channel carries every progress/result item in order and preserves serialized field names and large manifest IDs.
 - [ ] Channel completion closes observable after final value; stream errors preserve message and code.
 - [ ] `cancel_request` cancels work only for originating window; closing that window cancels its outstanding work and releases request entries.
@@ -211,12 +212,12 @@ Linux Proton routes are intentionally outside this Windows-only rewrite: `linux.
 
 - [x] Preview settings-import failures are logged and shown as an in-app error notification so a failed import is visible and can be retried on a later launch.
 - [x] Read-only post-install audit on 2026-10-16 found local Preview executable `2.0.0-f77b1389` (SHA-256 `7FECF9BD82E275541F0D32FFD35AC5FD2B81CD1046E07355AE8811D41EF74FB9`). It predates the available `2.0.0-011ec9bd` installer. The app log records an earlier `steam-session-exists` `NOT_IMPLEMENTED` error at 06:59 UTC, then startup readiness at 08:13 UTC; the audit did not launch the app.
-- [x] The post-install log records 14 non-secret legacy renderer preferences imported at 08:13 UTC. Preview settings show legacy import complete and renderer-import marker version 5. At the time of that audit, the installed `2.0.0-f77b1389` executable had not been replaced by the then-available `2.0.0-011ec9bd` installer. The current `2.0.0-421e4aac` installers have since been built; runtime behavior remains unverified.
+- [x] The post-install log records 14 non-secret legacy renderer preferences imported at 08:13 UTC. Preview settings show legacy import complete and renderer-import marker version 5. At the time of that audit, the installed `2.0.0-f77b1389` executable had not been replaced by the then-available `2.0.0-011ec9bd` installer. Current `2.0.0-c8038bb4` installers have since been built; runtime behavior remains unverified.
 - [x] A read-only LevelDB key-name comparison found all 14 imported keys in both legacy and Preview storage, including `first-color`, `second-color`, launch settings, store selection, audio level, and dismissal choices. No stored values were recorded; runtime display remains pending.
 - [x] Read-only local data audit found legacy `config.json` and renderer LevelDB present; Preview selects `D:\` and uses library `D:\BSManager`. `D:\BSManager\config.cfg` contains one custom color record for Beat Saber `1.45.2` (`#45ffac`, default folder name); matching `BSInstances\1.45.2` contains `Beat Saber.exe` and `Beat Saber_Data\globalgamemanagers` with version string `1.45.2`. Color source and scan inputs are present; display in packaged app remains pending.
 - [x] Static migration-path audit confirms Preview stores settings separately, imports legacy `config.json` while retaining existing Preview values, and reads allow-listed renderer preferences from legacy LevelDB. Installed custom-version colors are read from the selected library's `config.cfg` by game-version/name. Runtime import and color display remain unverified.
 - [x] Replacement renderer migration reads the same allow-listed legacy LevelDB preferences, fills only missing Tauri localStorage keys, stores its completion marker under the replacement profile's app-config directory, and leaves legacy `config.json` untouched. Import remains idempotent and retries if interrupted before marker completion; runtime behavior remains unchecked.
-- [ ] Install `2.0.0-421e4aac` and confirm Preview startup, Steam login state, imported settings, the `1.45.2` version color, and the Settings crash fix. The v5 Preview marker should trigger the v6 import prompt once.
+- [ ] Install `2.0.0-c8038bb4` and confirm Preview startup, Steam login state, imported settings, the `1.45.2` version color, and the Settings crash fix. The v5 Preview marker should trigger the v6 import prompt once.
 - [ ] Steam password, QR, Steam Guard, remembered session, resume, CDN failover, verification, progress, input, cancel, and retry.
 - [ ] Meta login cookie capture, remembered session, expired credential, logout, manifest download, decompression, integrity failure, resume, and cancel.
 - [ ] Steam and Meta launch, VR detection/warning, arguments/environment, elevation denied, process tracking, close-on-launch, and LIV integration.
@@ -240,7 +241,7 @@ Linux Proton routes are intentionally outside this Windows-only rewrite: `linux.
 - [ ] Compare baseline and Tauri at 100%, 125%, and 150% Windows display scaling.
 - [ ] Compare light, dark, OS theme, and custom colors.
 - [ ] Compare main window at default, minimum, and maximized sizes; review all six app windows.
-- [ ] Confirm Preview displays the Preview title-bar tag and `v2.0.0-421e4aac` link, which opens commit `421e4aac` on the fork; Replacement does not show the Preview tag.
+- [ ] Confirm Preview displays the Preview title-bar tag and `v2.0.0-c8038bb4` link, which opens commit `c8038bb4` on the fork; Replacement does not show the Preview tag.
 - [ ] Compare setup, library, version tabs, shared content, settings, dialogs, animations, fonts, icons, spacing, typography, and scroll behavior.
 - [ ] Record any remaining WebView2 rendering differences with matching baseline and Tauri captures supplied or initiated by the user.
 
@@ -248,9 +249,9 @@ Linux Proton routes are intentionally outside this Windows-only rewrite: `linux.
 
 - [ ] Confirm preview and replacement NSIS install/uninstall, WebView2 bootstrapper, shortcuts, and elevation behavior.
 - [ ] Confirm replacement rollback backup paths and `migration.json` contents before relying on installer recovery.
-- [x] Built Preview from commit `421e4aac` with temporary version `2.0.0-421e4aac`: `release/tauri/preview/BSManager-Preview-2.0.0-421e4aac-x64-setup.exe` (10,733,172 bytes), SHA-256 `5957B3706D9D0EA50B8342D1D3A5DB9E42465442305C8AED122BBEE02C78F7D3`, Authenticode `NotSigned`.
-- [x] Built Replacement from commit `421e4aac` with temporary version `2.0.0-421e4aac`: `release/tauri/replacement/BSManager-2.0.0-421e4aac-x64-setup.exe` (10,730,909 bytes), SHA-256 `CC00CD48D91BBCC1B3E4E95D02496039C7CC4F42F727439492261CB75D6FBD4C`, Authenticode `NotSigned`.
+- [x] Built Preview from commit `c8038bb4` with temporary version `2.0.0-c8038bb4`: `release/tauri/preview/BSManager-Preview-2.0.0-c8038bb4-x64-setup.exe` (10,733,433 bytes), SHA-256 `9CB004FF085C10857609E7C55CD234EC1BC60076AF7C9AB6F09CC9A1F893017D`, Authenticode `NotSigned`.
+- [x] Built Replacement from commit `c8038bb4` with temporary version `2.0.0-c8038bb4`: `release/tauri/replacement/BSManager-2.0.0-c8038bb4-x64-setup.exe` (10,731,540 bytes), SHA-256 `5C2D36159848037BCEF6ECA25A23F73CC9F06C2B0240AA9E0A91A0639D7FBC25`, Authenticode `NotSigned`.
 - [x] The Tauri UI contract TypeScript compilation, Vite production build, Rust helper builds, and Rust application builds completed for both profiles. The temporary version was removed from `package.json`, `Cargo.toml`, `Cargo.lock`, and `tauri.conf.json` after packaging; these source files remain at `2.0.0`.
-- [x] Title-bar source displays the backend version and links a hash suffix to `https://github.com/SlopSaber/bs-manager/commit/<hash>`. The compiled executable reports product version `2.0.0-421e4aac`; runtime display and link behavior remain unreviewed.
-- [x] Inspected current `2.0.0-421e4aac` NSIS archives with 7-Zip. Both contain `bs-manager-tauri.exe` and the three Rust helper executables under `_up_\assets\scripts`; neither contains Electron or Node runtime files. `bs-versions.json` is absent because Rust embeds the version catalog.
-- [ ] User installs `2.0.0-421e4aac` Preview and confirms installer writes the bundled catalog successfully, then reviews startup, settings migration, the Settings crash fix, and version colors.
+- [x] Title-bar source displays the backend version and links a hash suffix to `https://github.com/SlopSaber/bs-manager/commit/<hash>`. The compiled executable reports product version `2.0.0-c8038bb4`; runtime display and link behavior remain unreviewed.
+- [x] Inspected current `2.0.0-c8038bb4` NSIS archives with 7-Zip. Both contain `bs-manager-tauri.exe` and the three Rust helper executables under `_up_\assets\scripts`; neither contains Electron or Node runtime files. `bs-versions.json` is absent because Rust embeds the version catalog.
+- [ ] User installs `2.0.0-c8038bb4` Preview and confirms installer writes the bundled catalog successfully, then reviews startup, settings migration, the Settings crash fix, and version colors.
