@@ -12,7 +12,7 @@ export interface StaticConfigKeyValues {
     "auto-update": AutoUpdate;
 
     // Linux-specific setting retained for the existing shared settings contract.
-    "proton-folder": string;
+    "proton-folder": string | null;
     "versions": BSVersion[];
 }
 

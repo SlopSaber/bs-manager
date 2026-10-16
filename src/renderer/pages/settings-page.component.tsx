@@ -116,10 +116,13 @@ export function SettingsPage() {
         playlistsManager.isDeepLinksEnabled().then(enabled => setPlaylistsDeepLinkEnabled(() => enabled));
         modelsManager.isDeepLinksEnabled().then(enabled => setModelsDeepLinkEnabled(() => enabled));
 
-        staticConfig.get("proton-folder").then((folder = "") => {
-            setProtonFolder(folder);
-            setProtonFolderInput(folder);
-        });
+        if (window.desktop.platform === "linux") {
+            staticConfig.get("proton-folder").then(folder => {
+                const path = folder ?? "";
+                setProtonFolder(path);
+                setProtonFolderInput(path);
+            });
+        }
 
     }, []);
 
@@ -420,7 +423,7 @@ export function SettingsPage() {
                 </SettingContainer>
 
                 <SettingContainer os="linux" title="pages.settings.proton-folder.title" description="pages.settings.proton-folder.description">
-                    <SettingFolderInput value={protonFolderInput} label={t("pages.settings.proton-folder.title")} canApply={!!protonFolderInput.trim() && protonFolderInput !== protonFolder} onChange={setProtonFolderInput} onApply={() => saveProtonFolder(protonFolderInput)} onChoose={setDefaultProtonFolder} />
+                    <SettingFolderInput value={protonFolderInput} label={t("pages.settings.proton-folder.title")} canApply={!!protonFolderInput?.trim() && protonFolderInput !== protonFolder} onChange={setProtonFolderInput} onApply={() => saveProtonFolder(protonFolderInput)} onChoose={setDefaultProtonFolder} />
                 </SettingContainer>
 
                 <SettingContainer title="pages.settings.additional-content.title" description="pages.settings.additional-content.description">
