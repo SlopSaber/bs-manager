@@ -206,6 +206,8 @@ Linux Proton routes are intentionally outside this Windows-only rewrite: `linux.
 
 ## Feature and failure scenarios
 
+- [x] Existing Preview log dated 2026-10-15 recorded `steam-session-exists` as `NOT_IMPLEMENTED`; current dispatcher calls the Rust session store, where a missing `username.json` returns `false`. Packaged in `2.0.0-41d43873`.
+- [ ] Confirm Preview startup no longer logs that route error and Steam login state remains stable.
 - [ ] Steam password, QR, Steam Guard, remembered session, resume, CDN failover, verification, progress, input, cancel, and retry.
 - [ ] Meta login cookie capture, remembered session, expired credential, logout, manifest download, decompression, integrity failure, resume, and cancel.
 - [ ] Steam and Meta launch, VR detection/warning, arguments/environment, elevation denied, process tracking, close-on-launch, and LIV integration.
