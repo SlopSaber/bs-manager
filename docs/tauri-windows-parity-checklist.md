@@ -226,8 +226,8 @@ Linux Proton routes are intentionally outside this Windows-only rewrite: `linux.
 - [ ] Steam and Meta launch, VR detection/warning, arguments/environment, elevation denied, process tracking, close-on-launch, and LIV integration.
 - [ ] Version import, edit, clone, verify, relocation, delete, shared junctions/symlinks, backup/restore, and shortcut creation.
 - [x] Linker source fix: link/unlink promises now track the exact queued action, and cancelling a pending action resolves it without removing an active operation. Packaged junction/symlink behavior remains unchecked.
-- [x] Linker source optimization: when every immediate source entry already exists byte-identically under the shared folder, skip the transactional copy of the entire shared tree. Different or missing entries keep the existing merge-copy path.
-- [ ] Link populated `CustomLevels` while `SharedMaps` already contains many songs and duplicate built-in map folders; confirm redundant content is not recopied, song data stays intact, differing files still merge, and the new junction works.
+- [x] Linker source optimization: when every source path already exists byte-identically in the shared folder, allow additional shared files and skip the transactional copy of the entire shared tree. Different or missing source entries keep the existing merge-copy path.
+- [ ] Link populated `CustomLevels` while `SharedMaps` already contains many songs and duplicate built-in map folders; confirm redundant content is not recopied, extra shared files stay intact, differing files still merge, and the new junction works.
 - [ ] Mod dependencies, import/install/uninstall, maps and playlists, model operations, search/filter/sort, archives, sharing, caches, and audio previews.
 - [x] Source guard for repeated BSManager-logo clicks: audio playback requests now track desired state and ignore stale completions.
 - [ ] Rapidly click the BSManager logo during and after an audio preview; confirm playback toggles cleanly and the app remains open.

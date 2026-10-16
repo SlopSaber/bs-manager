@@ -256,14 +256,14 @@ fn directory_contents_already_shared(source: &Path, destination: &Path) -> io::R
     for entry in fs::read_dir(source)? {
         let entry = entry?;
         let target = destination.join(entry.file_name());
-        if !path_exists(&target) || !paths_have_same_contents(&entry.path(), &target)? {
+        if !path_exists(&target) || !source_path_is_already_shared(&entry.path(), &target)? {
             return Ok(false);
         }
     }
     Ok(true)
 }
 
-fn paths_have_same_contents(left: &Path, right: &Path) -> io::Result<bool> {
+fn source_path_is_already_shared(left: &Path, right: &Path) -> io::Result<bool> {
     let left_metadata = fs::symlink_metadata(left)?;
     let right_metadata = fs::symlink_metadata(right)?;
     if is_link(left) || is_link(right) {
@@ -277,7 +277,7 @@ fn paths_have_same_contents(left: &Path, right: &Path) -> io::Result<bool> {
 
         let left_entries = fs::read_dir(left)?.collect::<Result<Vec<_>, _>>()?;
         let right_entries = fs::read_dir(right)?.collect::<Result<Vec<_>, _>>()?;
-        if left_entries.len() != right_entries.len() {
+        if left_entries.len() > right_entries.len() {
             return Ok(false);
         }
 
@@ -288,7 +288,7 @@ fn paths_have_same_contents(left: &Path, right: &Path) -> io::Result<bool> {
             }) else {
                 return Ok(false);
             };
-            if !paths_have_same_contents(&left_entry.path(), &right_entry.path())? {
+            if !source_path_is_already_shared(&left_entry.path(), &right_entry.path())? {
                 return Ok(false);
             }
         }
