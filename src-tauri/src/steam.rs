@@ -140,7 +140,7 @@ pub async fn download<R: Runtime>(
 
     let executable = downloader_path(app)?;
     let mut command = Command::new(executable);
-    command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
+    command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true);
     #[cfg(windows)]
     {
         command.creation_flags(0x0800_0000);
@@ -207,6 +207,7 @@ pub async fn download<R: Runtime>(
                     Err(error) => {
                         failure = Some(serialized_error(error.to_string(), "NotCompleted"));
                         cancelled.store(true, Ordering::Relaxed);
+                        let _ = child.start_kill();
                         break;
                     }
                 }
