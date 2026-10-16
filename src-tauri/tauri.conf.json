@@ -21,12 +21,9 @@
         "category": "Game",
         "shortDescription": "Manage maps, mods and Beat Saber versions",
         "resources": [
-            "../assets/jsons/bs-versions.json",
-            "../assets/jsons/patreons.json",
-        "../assets/proto/song_details_cache_v1.proto",
-        "../assets/scripts/bs-downloader.exe",
-        "../assets/scripts/oculus-allow-dev-sideloaded.exe",
-        "../assets/scripts/start_beat_saber_admin.exe"
+            "../assets/scripts/bs-downloader.exe",
+            "../assets/scripts/oculus-allow-dev-sideloaded.exe",
+            "../assets/scripts/start_beat_saber_admin.exe"
         ],
         "windows": {
             "nsis": {
