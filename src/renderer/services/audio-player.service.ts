@@ -36,14 +36,32 @@ export class AudioPlayerService {
     private _volume$ = new BehaviorSubject<PlayerVolume>(
         this.config.get<PlayerVolume>('audio-level') || { volume: 0.5, muted: false },
     );
+    private playbackRequested = false;
+    private playbackRevision = 0;
+    private playbackRequest: Promise<void> | null = null;
 
     private constructor() {
-        this.player.onplay = () => this._playing$.next(true);
-        this.player.onpause = () => this._playing$.next(false);
+        this.player.onplay = () => {
+            if (!this.player.paused) {
+                this.playbackRequested = true;
+                this._playing$.next(true);
+            }
+        };
+        this.player.onpause = () => {
+            if (this.player.paused) {
+                this.playbackRequested = false;
+                this._playing$.next(false);
+            }
+        };
         this.player.onended = () => {
+            if (!this.player.ended) return;
+            this.playbackRequested = false;
+            this.playbackRevision++;
             this._playing$.next(false);
-            const nextIndex = (this._soundsIndex$.value + 1) % this._sounds$.value.length;
-            if (nextIndex !== 0 || this._sounds$.value.length > 1) {
+            const soundCount = this._sounds$.value.length;
+            if (soundCount === 0) return;
+            const nextIndex = (this._soundsIndex$.value + 1) % soundCount;
+            if (nextIndex !== 0 || soundCount > 1) {
                 this._soundsIndex$.next(nextIndex);
             }
         };
@@ -52,7 +70,7 @@ export class AudioPlayerService {
             if(!sound){ return; }
             this.player.src = sound.src;
             this._bpm$.next(sound.bpm || 0);
-            this.player.play().catch(logRenderError);
+            void this.startPlayback();
         });
 
         this._volume$.subscribe(volume => {
@@ -69,18 +87,49 @@ export class AudioPlayerService {
     }
 
     public pause(): void {
+        this.playbackRequested = false;
+        this.playbackRevision++;
+        this.playbackRequest = null;
         this._playing$.next(false);
         this.player.pause();
     }
 
     public resume(): Promise<void> {
-        if(this._playing$.value){
+        return this.startPlayback();
+    }
+
+    public togglePlayback(): void {
+        if (this.playbackRequested || this._playing$.value || !this.player.paused) {
+            this.pause();
+        } else {
+            void this.startPlayback();
+        }
+    }
+
+    private startPlayback(): Promise<void> {
+        if (this.playbackRequested) {
+            return this.playbackRequest ?? Promise.resolve();
+        }
+        if (!this.player.src) {
             return Promise.resolve();
         }
 
-        return this.player.play().then(() => {
-            this._playing$.next(true);
-        }).catch(logRenderError);
+        this.playbackRequested = true;
+        const revision = ++this.playbackRevision;
+        const request = this.player.play().then(() => {
+            if (revision === this.playbackRevision && this.playbackRequested && !this.player.paused) {
+                this._playing$.next(true);
+            }
+        }).catch(error => {
+            if (revision !== this.playbackRevision) return;
+            this.playbackRequested = false;
+            const errorName = typeof error === "object" && error !== null && "name" in error ? error.name : undefined;
+            if (errorName !== "AbortError") logRenderError(error);
+        }).finally(() => {
+            if (this.playbackRequest === request) this.playbackRequest = null;
+        });
+        this.playbackRequest = request;
+        return request;
     }
 
     public setVolume(volume: number): void {

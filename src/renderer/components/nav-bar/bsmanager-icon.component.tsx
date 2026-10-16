@@ -25,11 +25,7 @@ export const BsManagerIcon = memo(({ className }: { className?: string }) => {
     };
 
     const clickAction = () => {
-        if (playing) {
-            audioPlayer.pause();
-        } else {
-            audioPlayer.resume();
-        }
+        audioPlayer.togglePlayback();
     };
 
     return (
