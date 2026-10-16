@@ -733,12 +733,10 @@ pub async fn import_legacy_username<R: Runtime>(app: &AppHandle<R>, username: &s
 }
 
 pub async fn delete_session<R: Runtime>(app: &AppHandle<R>) -> Result<(), SerializedError> {
-    let username = load_session_username(app).await?;
-    if let Some(username) = username {
-        remove_session_file(app, &username).await?;
-    }
-    let marker = session_username_path(app)?;
-    match tokio::fs::remove_file(marker).await {
+    let config = app.path().app_config_dir()
+        .map_err(|error| serialized_error(error.to_string(), "SESSION_STORAGE_FAILED"))?;
+    let directory = config.join("steam-sessions");
+    match tokio::fs::remove_dir_all(directory).await {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(serialized_error(error.to_string(), "SESSION_STORAGE_FAILED")),
@@ -947,20 +945,23 @@ async fn load_session_username<R: Runtime>(app: &AppHandle<R>) -> Result<Option<
 
 fn save_session_username<R: Runtime>(app: &AppHandle<R>, username: &str) -> Result<(), SerializedError> {
     let path = session_username_path(app)?;
-    let parent = path.parent().ok_or_else(|| serialized_error("Steam session storage path is invalid", "SESSION_STORAGE_FAILED"))?;
-    fs::create_dir_all(parent).map_err(|error| serialized_error(error.to_string(), "SESSION_STORAGE_FAILED"))?;
     let bytes = serde_json::to_vec(&json!({ "username": username.trim() }))
         .map_err(|error| serialized_error(error.to_string(), "SESSION_STORAGE_FAILED"))?;
-    fs::write(path, bytes).map_err(|error| serialized_error(error.to_string(), "SESSION_STORAGE_FAILED"))
+    write_session_file(&path, &bytes)
 }
 
-async fn remove_session_file<R: Runtime>(app: &AppHandle<R>, username: &str) -> Result<(), SerializedError> {
-    let path = session_path(app, username).await?;
-    match tokio::fs::remove_file(path).await {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(serialized_error(error.to_string(), "SESSION_STORAGE_FAILED")),
+fn write_session_file(path: &Path, bytes: &[u8]) -> Result<(), SerializedError> {
+    let parent = path.parent().ok_or_else(|| serialized_error("Steam session storage path is invalid", "SESSION_STORAGE_FAILED"))?;
+    fs::create_dir_all(parent).map_err(|error| serialized_error(error.to_string(), "SESSION_STORAGE_FAILED"))?;
+    let name = path.file_name().and_then(|name| name.to_str())
+        .ok_or_else(|| serialized_error("Steam session storage path is invalid", "SESSION_STORAGE_FAILED"))?;
+    let temporary = parent.join(format!("{name}.{}.tmp", Uuid::new_v4()));
+    fs::write(&temporary, bytes).map_err(|error| serialized_error(error.to_string(), "SESSION_STORAGE_FAILED"))?;
+    if let Err(error) = fs::rename(&temporary, path) {
+        let _ = fs::remove_file(temporary);
+        return Err(serialized_error(error.to_string(), "SESSION_STORAGE_FAILED"));
     }
+    Ok(())
 }
 
 async fn load_session<R: Runtime>(app: &AppHandle<R>, username: &str) -> Option<SteamSession> {
@@ -981,7 +982,7 @@ async fn save_session<R: Runtime>(app: &AppHandle<R>, session: &SteamSession) ->
     fs::create_dir_all(parent).map_err(|error| serialized_error(error.to_string(), "SESSION_STORAGE_FAILED"))?;
     let bytes = serde_json::to_vec(session).map_err(|error| serialized_error(error.to_string(), "SESSION_STORAGE_FAILED"))?;
     let encrypted = dpapi::protect(&bytes).map_err(|error| serialized_error(error.to_string(), "SESSION_STORAGE_FAILED"))?;
-    fs::write(path, encrypted).map_err(|error| serialized_error(error.to_string(), "SESSION_STORAGE_FAILED"))?;
+    write_session_file(&path, &encrypted)?;
     save_session_username(app, &session.username)
 }
 
