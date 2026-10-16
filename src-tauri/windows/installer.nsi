@@ -234,6 +234,13 @@ Function PageReinstall
 
   nsis_tauri_utils::SemverCompare "${VERSION}" $R0
   Pop $R0
+  ; Replace existing NSIS builds in place for the same or a newer version.
+  ${If} $WixMode <> 1
+    ${If} $R0 = 0
+    ${OrIf} $R0 = 1
+      Abort
+    ${EndIf}
+  ${EndIf}
   ; Reinstalling the same version
   ${If} $R0 = 0
     StrCpy $R1 "$(alreadyInstalledLong)"

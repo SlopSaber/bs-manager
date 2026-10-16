@@ -17,6 +17,9 @@ export default defineConfig({
     base: "./",
     resolve: { alias: aliases },
     plugins: [react()],
+    define: {
+        __BSM_SETTINGS_COMMIT__: JSON.stringify(process.env.BSM_SETTINGS_COMMIT ?? ""),
+    },
     server: { host: "127.0.0.1", port: 1420, strictPort: true },
     build: {
         outDir: path.join(root, "release", "tauri", "ui"),

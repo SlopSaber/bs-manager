@@ -109,7 +109,8 @@ export function SettingsPage() {
     const [hasSteamSession, setHasSteamSession] = useState(false);
     const [hasOculusSession, setHasOculusSession] = useState(false);
     const appVersion = useObservable(() => autoUpdater.getAppVersion());
-    const buildCommitHash = appVersion?.match(/-([0-9a-f]{7,40})$/i)?.[1];
+    const buildCommitHash = appVersion && __BSM_SETTINGS_COMMIT__.match(/^[0-9a-f]{7,40}$/i)?.[0];
+    const settingsVersion = buildCommitHash ? `${appVersion}-${buildCommitHash}` : appVersion;
 
     useEffect(() => {
         loadInstallationFolder();
@@ -631,7 +632,7 @@ export function SettingsPage() {
                         aria-label={`Open BSManager commit ${buildCommitHash} on GitHub`}
                         className="bg-light-main-color-1 dark:bg-main-color-1 rounded-md py-1 px-2 font-bold float-right mb-5 cursor-pointer hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
                     >
-                        v{appVersion}
+                        v{settingsVersion}
                     </button>
                 ) : (
                     <span className="bg-light-main-color-1 dark:bg-main-color-1 rounded-md py-1 px-2 font-bold float-right mb-5">v{appVersion}</span>

@@ -41,6 +41,7 @@ await writeFile(path.join(outputDirectory, "artifact.json"), `${JSON.stringify({
     productName: profile.productName,
     identifier: profile.identifier,
     version,
+    settingsCommit: process.env.BSM_SETTINGS_COMMIT || undefined,
     installer: outputName,
     sha256: digest.digest("hex"),
     signed: false,

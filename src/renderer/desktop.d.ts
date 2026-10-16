@@ -1,6 +1,8 @@
 import type { IpcStreamMessage } from "shared/models/ipc/ipc-stream-message.interface";
 
 declare global {
+    const __BSM_SETTINGS_COMMIT__: string;
+
     interface Window {
         desktop: {
             platform: "win32";
