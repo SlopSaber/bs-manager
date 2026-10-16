@@ -1,4 +1,4 @@
-use std::{fs, io, path::{Component, Path, PathBuf}};
+use std::{fs, io::{self, Read, Write}, path::{Component, Path, PathBuf}, sync::atomic::{AtomicBool, Ordering}};
 
 pub struct OperationLocks {
     #[cfg(windows)]
@@ -154,9 +154,12 @@ pub fn canonicalize_existing_directory(path: &Path) -> Result<PathBuf, String> {
 }
 
 #[cfg(windows)]
-pub fn copy_library(source: &Path, destination: &Path) -> Result<bool, LibraryError> {
+pub fn copy_library(source: &Path, destination: &Path, cancelled: &AtomicBool) -> Result<bool, LibraryError> {
     use windows_library::{copy_directory, normalized_path, path_is_within};
 
+    if cancelled.load(Ordering::Relaxed) {
+        return Err(LibraryError::Io(io::Error::new(io::ErrorKind::Interrupted, "Library copy was cancelled")));
+    }
     fs::create_dir_all(source)?;
     let source = fs::canonicalize(source)?;
     let destination = normalized_path(destination)?;
@@ -167,12 +170,12 @@ pub fn copy_library(source: &Path, destination: &Path) -> Result<bool, LibraryEr
         return Err(LibraryError::CopyToSubpath);
     }
 
-    copy_directory(&source, &destination)?;
+    copy_directory(&source, &destination, cancelled)?;
     Ok(true)
 }
 
 #[cfg(not(windows))]
-pub fn copy_library(_source: &Path, _destination: &Path) -> Result<bool, LibraryError> {
+pub fn copy_library(_source: &Path, _destination: &Path, _cancelled: &AtomicBool) -> Result<bool, LibraryError> {
     Err(LibraryError::Io(io::Error::new(io::ErrorKind::Unsupported, "Library relocation is available only on Windows")))
 }
 
@@ -219,38 +222,69 @@ mod windows_library {
         })
     }
 
-    pub fn copy_directory(source: &Path, destination: &Path) -> io::Result<()> {
+    pub fn copy_directory(source: &Path, destination: &Path, cancelled: &AtomicBool) -> io::Result<()> {
+        check_copy_cancelled(cancelled)?;
         if destination.exists() && !fs::symlink_metadata(destination)?.is_dir() {
             return Err(io::Error::new(io::ErrorKind::AlreadyExists, "Destination library path is not a directory"));
         }
-        fs::create_dir_all(destination)?;
-        for entry in fs::read_dir(source)? {
+        let parent = destination.parent()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Destination library parent is missing"))?;
+        let staging = parent.join(format!(".bsmanager-copy-{}", uuid::Uuid::new_v4()));
+        let backup = parent.join(format!(".bsmanager-backup-{}", uuid::Uuid::new_v4()));
+        let result = (|| {
+            if destination.is_dir() {
+                copy_directory_contents(destination, &staging, cancelled)?;
+            } else {
+                fs::create_dir_all(&staging)?;
+            }
+            copy_directory_contents(source, &staging, cancelled)?;
+            check_copy_cancelled(cancelled)?;
+
+            let had_destination = destination.exists();
+            if had_destination {
+                fs::rename(destination, &backup)?;
+            }
+            if let Err(error) = fs::rename(&staging, destination) {
+                if had_destination { let _ = fs::rename(&backup, destination); }
+                return Err(error);
+            }
+            if had_destination { let _ = remove_entry(&backup); }
+            Ok(())
+        })();
+        if result.is_err() { let _ = remove_entry(&staging); }
+        result
+    }
+
+    fn copy_directory_contents(source_root: &Path, destination_root: &Path, cancelled: &AtomicBool) -> io::Result<()> {
+        check_copy_cancelled(cancelled)?;
+        fs::create_dir_all(destination_root)?;
+        for entry in fs::read_dir(source_root)? {
+            check_copy_cancelled(cancelled)?;
             let entry = entry?;
-            let source_item = entry.path();
-            let destination_item = destination.join(entry.file_name());
-            copy_entry(source, destination, &source_item, &destination_item)?;
+            copy_entry(source_root, destination_root, &entry.path(), &destination_root.join(entry.file_name()), cancelled)?;
         }
         Ok(())
     }
 
-    fn copy_entry(source_root: &Path, destination_root: &Path, source: &Path, destination: &Path) -> io::Result<()> {
+    fn copy_entry(source_root: &Path, destination_root: &Path, source: &Path, destination: &Path, cancelled: &AtomicBool) -> io::Result<()> {
+        check_copy_cancelled(cancelled)?;
         let metadata = fs::symlink_metadata(source)?;
         if junction::exists(source)? {
             let target = junction::get_target(source)?;
-            return copy_junction(source_root, destination_root, &target, destination);
+            return copy_junction(source_root, destination_root, &target, destination, cancelled);
         }
 
         if metadata.file_type().is_symlink() {
             let target = fs::read_link(source)?;
             let target = if target.is_absolute() { target } else { source.parent().unwrap_or(source_root).join(target) };
             if fs::metadata(source).is_ok_and(|target_metadata| target_metadata.is_dir()) {
-                return copy_junction(source_root, destination_root, &target, destination);
+                return copy_junction(source_root, destination_root, &target, destination, cancelled);
             }
             remove_destination_link(destination)?;
             if destination.exists() && fs::symlink_metadata(destination)?.is_dir() {
                 return Err(io::Error::new(io::ErrorKind::AlreadyExists, "A file link conflicts with a destination folder"));
             }
-            fs::copy(source, destination)?;
+            copy_file(source, destination, cancelled)?;
             return Ok(());
         }
 
@@ -261,19 +295,21 @@ mod windows_library {
             }
             fs::create_dir_all(destination)?;
             for entry in fs::read_dir(source)? {
+                check_copy_cancelled(cancelled)?;
                 let entry = entry?;
-                copy_entry(source_root, destination_root, &entry.path(), &destination.join(entry.file_name()))?;
+                copy_entry(source_root, destination_root, &entry.path(), &destination.join(entry.file_name()), cancelled)?;
             }
         } else {
             if destination.exists() && fs::symlink_metadata(destination)?.is_dir() {
                 return Err(io::Error::new(io::ErrorKind::AlreadyExists, "A source file conflicts with a destination folder"));
             }
-            fs::copy(source, destination)?;
+            copy_file(source, destination, cancelled)?;
         }
         Ok(())
     }
 
-    fn copy_junction(source_root: &Path, destination_root: &Path, target: &Path, destination: &Path) -> io::Result<()> {
+    fn copy_junction(source_root: &Path, destination_root: &Path, target: &Path, destination: &Path, cancelled: &AtomicBool) -> io::Result<()> {
+        check_copy_cancelled(cancelled)?;
         remove_destination_link(destination)?;
         if destination.exists() {
             let metadata = fs::symlink_metadata(destination)?;
@@ -289,6 +325,28 @@ mod windows_library {
             .map(|relative| destination_root.join(relative))
             .unwrap_or_else(|| target.to_path_buf());
         junction::create(&relocated_target, destination)
+    }
+
+    fn check_copy_cancelled(cancelled: &AtomicBool) -> io::Result<()> {
+        if cancelled.load(Ordering::Relaxed) {
+            Err(io::Error::new(io::ErrorKind::Interrupted, "Library copy was cancelled"))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn copy_file(source: &Path, destination: &Path, cancelled: &AtomicBool) -> io::Result<()> {
+        let mut input = fs::File::open(source)?;
+        let mut output = fs::OpenOptions::new().write(true).create(true).truncate(true).open(destination)?;
+        let mut buffer = [0_u8; 1024 * 1024];
+        loop {
+            check_copy_cancelled(cancelled)?;
+            let read = input.read(&mut buffer)?;
+            if read == 0 { break; }
+            output.write_all(&buffer[..read])?;
+        }
+        output.flush()?;
+        fs::set_permissions(destination, fs::metadata(source)?.permissions())
     }
 
     fn relative_suffix(parent: &Path, child: &Path) -> Option<PathBuf> {

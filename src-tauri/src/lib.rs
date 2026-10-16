@@ -855,7 +855,8 @@ async fn handle_request<R: Runtime>(
                     .map_err(|error| serialized_error(error, "INSTALL_PATH_FAILED"))?;
                 let source = old_directory.clone();
                 let destination = install_path.clone();
-                let copied = tokio::task::spawn_blocking(move || library::copy_library(&source, &destination))
+                let cancelled_for_copy = cancelled.clone();
+                let copied = tokio::task::spawn_blocking(move || library::copy_library(&source, &destination, &cancelled_for_copy))
                     .await
                     .map_err(|error| serialized_error(format!("Library move worker failed: {error}"), "LIBRARY_MOVE_FAILED"))?
                     .map_err(|error| match error {
@@ -863,6 +864,9 @@ async fn handle_request<R: Runtime>(
                             "The destination cannot be inside or above the current library",
                             "COPY_TO_SUBPATH",
                         ),
+                        library::LibraryError::Io(error) if error.kind() == std::io::ErrorKind::Interrupted => {
+                            serialized_error("Library move was cancelled", "REQUEST_CANCELLED")
+                        }
                         library::LibraryError::Io(error) => serialized_error(error.to_string(), "LIBRARY_MOVE_FAILED"),
                     })?;
 
@@ -957,7 +961,7 @@ async fn handle_request<R: Runtime>(
         "bs-version.clone" => {
             let app_state = app.state::<AppState>();
             let _operation = app_state.library_operation.lock().await;
-            versions::clone_version(app, &args).await
+            versions::clone_version(app, &args, cancelled).await
         }
         "bs.uninstall" => {
             let app_state = app.state::<AppState>();

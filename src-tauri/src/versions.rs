@@ -364,7 +364,7 @@ pub fn edit_version<R: Runtime>(app: &AppHandle<R>, args: &Value) -> Result<Valu
     Ok(edited)
 }
 
-pub async fn clone_version<R: Runtime>(app: &AppHandle<R>, args: &Value) -> Result<Value, SerializedError> {
+pub async fn clone_version<R: Runtime>(app: &AppHandle<R>, args: &Value, cancelled: Arc<AtomicBool>) -> Result<Value, SerializedError> {
     let version = args.get("version").ok_or_else(|| serialized_error("Version is required", "INVALID_VERSION"))?;
     let requested_name = args.get("name").and_then(Value::as_str)
         .ok_or_else(|| serialized_error("Version name is required", "INVALID_VERSION"))?;
@@ -387,18 +387,28 @@ pub async fn clone_version<R: Runtime>(app: &AppHandle<R>, args: &Value) -> Resu
 
     let source_for_copy = origin.clone();
     let destination_for_copy = destination.clone();
+    let cancelled_for_copy = cancelled.clone();
     tokio::task::spawn_blocking(move || {
         if let Some(parent) = destination_for_copy.parent() {
             fs::create_dir_all(parent).map_err(library::LibraryError::Io)?;
         }
-        library::copy_library(&source_for_copy, &destination_for_copy)
+        library::copy_library(&source_for_copy, &destination_for_copy, &cancelled_for_copy)
     })
         .await
         .map_err(|error| serialized_error(format!("Version copy worker failed: {error}"), "CantClone"))?
         .map_err(|error| match error {
             library::LibraryError::CopyToSubpath => serialized_error("Cannot clone a version into itself", "COPY_TO_SUBPATH"),
+            library::LibraryError::Io(error) if error.kind() == io::ErrorKind::Interrupted => {
+                serialized_error("Version copy was cancelled", "REQUEST_CANCELLED")
+            }
             library::LibraryError::Io(error) => serialized_error(error.to_string(), "CantClone"),
         })?;
+
+    if cancelled.load(Ordering::Relaxed) {
+        let destination_for_cleanup = destination.clone();
+        let _ = tokio::task::spawn_blocking(move || library::remove_library(&destination_for_cleanup)).await;
+        return Err(serialized_error("Version copy was cancelled", "REQUEST_CANCELLED"));
+    }
 
     let root = super::install_directory(app)
         .map_err(|error| serialized_error(error, "INSTALL_PATH_FAILED"))?;

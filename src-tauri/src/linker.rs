@@ -233,7 +233,8 @@ fn create_link<R: Runtime>(app: &AppHandle<R>, target: &Path, link: &Path) -> Re
 }
 
 fn copy_directory(source: &Path, destination: &Path) -> io::Result<()> {
-    crate::library::copy_library(source, destination).map(|_| ()).map_err(|error| match error {
+    let cancelled = std::sync::atomic::AtomicBool::new(false);
+    crate::library::copy_library(source, destination, &cancelled).map(|_| ()).map_err(|error| match error {
         crate::library::LibraryError::CopyToSubpath => io::Error::new(io::ErrorKind::InvalidInput, "Cannot copy a folder into itself"),
         crate::library::LibraryError::Io(error) => error,
     })
