@@ -366,23 +366,42 @@ async fn download_verified_mod(version: &Value, cancelled: &AtomicBool) -> Resul
             return Err(serialized_error("Mod download was cancelled", "REQUEST_CANCELLED"));
         }
     };
+    let archive_path = std::env::temp_dir().join(format!("bsmanager-mod-{}.zip", uuid::Uuid::new_v4()));
     let mut stream = response.bytes_stream();
-    let mut bytes = Vec::new();
-    loop {
-        let chunk = tokio::select! {
-            chunk = stream.next() => chunk,
-            _ = wait_for_cancellation(cancelled) => {
-                return Err(serialized_error("Mod download was cancelled", "REQUEST_CANCELLED"));
-            }
-        };
-        let Some(chunk) = chunk else { break; };
-        bytes.extend_from_slice(&chunk.map_err(|error| serialized_error(error.to_string(), "MOD_DOWNLOAD_FAILED"))?);
+    let download_result = async {
+        let mut output = tokio::fs::OpenOptions::new().write(true).create_new(true).open(&archive_path).await
+            .map_err(|error| serialized_error(error.to_string(), "MOD_DOWNLOAD_FAILED"))?;
+        loop {
+            let chunk = tokio::select! {
+                chunk = stream.next() => chunk,
+                _ = wait_for_cancellation(cancelled) => {
+                    return Err(serialized_error("Mod download was cancelled", "REQUEST_CANCELLED"));
+                }
+            };
+            let Some(chunk) = chunk else { break; };
+            let chunk = chunk.map_err(|error| serialized_error(error.to_string(), "MOD_DOWNLOAD_FAILED"))?;
+            output.write_all(&chunk).await
+                .map_err(|error| serialized_error(error.to_string(), "MOD_DOWNLOAD_FAILED"))?;
+        }
+        output.flush().await
+            .map_err(|error| serialized_error(error.to_string(), "MOD_DOWNLOAD_FAILED"))?;
+        output.sync_all().await
+            .map_err(|error| serialized_error(error.to_string(), "MOD_DOWNLOAD_FAILED"))?;
+        Ok::<(), SerializedError>(())
+    }.await;
+    if let Err(error) = download_result {
+        let _ = tokio::fs::remove_file(&archive_path).await;
+        return Err(error);
     }
     let expected = version.get("contentHashes").and_then(Value::as_array).cloned().unwrap_or_default();
     let staging = std::env::temp_dir().join(format!("bsmanager-mod-{}", uuid::Uuid::new_v4()));
-    fs::create_dir_all(&staging).map_err(|error| serialized_error(error.to_string(), "MOD_DOWNLOAD_FAILED"))?;
+    if let Err(error) = fs::create_dir_all(&staging) {
+        let _ = fs::remove_file(&archive_path);
+        return Err(serialized_error(error.to_string(), "MOD_DOWNLOAD_FAILED"));
+    }
     let result = (|| {
-        let mut archive = ZipArchive::new(io::Cursor::new(bytes))
+        let archive_file = File::open(&archive_path).map_err(|error| serialized_error(error.to_string(), "MOD_ARCHIVE_FAILED"))?;
+        let mut archive = ZipArchive::new(archive_file)
             .map_err(|error| serialized_error(error.to_string(), "MOD_ARCHIVE_FAILED"))?;
         let mut matches = 0_usize;
         let mut paths = Vec::new();
@@ -422,6 +441,7 @@ async fn download_verified_mod(version: &Value, cancelled: &AtomicBool) -> Resul
         }
         Ok(paths)
     })();
+    let _ = fs::remove_file(&archive_path);
     match result {
         Ok(paths) => Ok((staging, paths)),
         Err(error) => { let _ = fs::remove_dir_all(staging); Err(error) }
