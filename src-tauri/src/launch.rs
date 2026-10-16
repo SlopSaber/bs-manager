@@ -140,6 +140,7 @@ async fn launch_inner<R: Runtime>(
                 }
             }
         }
+        let _ = std::fs::remove_file(environment_file);
         return Ok(Value::Null);
     }
 

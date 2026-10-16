@@ -17,8 +17,8 @@ Signed remote updates are opt-in at compile time. Preview reads `BSM_TAURI_PREVI
 
 Current local installers compile successfully under Node 24.21.0 and are unsigned. All profiles keep Tauri's configured window list empty so startup can choose a target before creating any window: a supported protocol URL or `.bplist` opens its corresponding window without first creating the main window; otherwise the `auto-update` setting selects the launcher when a signed update source is configured, falling back to the main window when updates are disabled or unavailable. The generated NSIS script contains both preinstall and preuninstall hook call sites. The hook code was included in the installer builds, but neither installer has been executed; migration, registry restoration, and uninstall behavior still need user-led review:
 
-- Preview: `release/tauri/preview/BSManager-Preview-1.6.0-x64-setup.exe`, SHA-256 `2c3f73d901689d22d7bb352de41cf98df958bfdb0554052380f1209301e17e3b`.
-- Replacement: `release/tauri/replacement/BSManager-1.6.0-x64-setup.exe`, SHA-256 `0deb65517f0d0f17629b338b43934d9098525467007d05465229eea3400e2eb7`.
+- Preview: `release/tauri/preview/BSManager-Preview-1.6.0-x64-setup.exe`, SHA-256 `2f866ea9ffcbc65d51ce10b0c1fc86f896d0316c3ace9483a1205a4b7f5b034d`.
+- Replacement: `release/tauri/replacement/BSManager-1.6.0-x64-setup.exe`, SHA-256 `4c2ee25adb8cf24124cd57c8371f7445f24668e04227fa196c44eb2d22989567`.
 
 ## Implemented in the Rust host
 
