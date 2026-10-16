@@ -1209,18 +1209,6 @@ fn cancel_request<R: Runtime>(app: AppHandle<R>, window: WebviewWindow<R>, reque
     Ok(())
 }
 
-#[tauri::command]
-fn register_protocol<R: Runtime>(app: AppHandle<R>, window: WebviewWindow<R>, protocol: String) -> Result<bool, String> {
-    if window.label() != "main" { return Err("Protocol registration is only available in the main window".to_owned()); }
-    let supported = ["bsmanager", "bsmanager-preview", "beatsaver", "web+bsmap", "bsplaylist", "modelsaber"];
-    if protocol == "bsmanager-preview" && app.config().identifier != "io.bsmanager.bsmanager.preview" {
-        return Err("Preview launch links are only available in the preview profile".to_owned());
-    }
-    if !supported.contains(&protocol.as_str()) { return Err("Unsupported BSManager protocol".to_owned()); }
-    protocols::set(&app, &protocol, true)?;
-    Ok(true)
-}
-
 fn is_application_window(label: &str) -> bool {
     matches!(label, "main" | "launcher" | "oneclick-download-map" | "oneclick-download-playlist" | "oneclick-download-model" | "shortcut-launch")
 }
@@ -1465,7 +1453,7 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_window_state::Builder::default().build())
-        .invoke_handler(tauri::generate_handler![request, send_lazy, cancel_request, register_protocol])
+        .invoke_handler(tauri::generate_handler![request, send_lazy, cancel_request])
         .setup(|app| {
             if let Err(error) = proxy::configure(app.handle()) {
                 log::warn!("Could not read the system proxy setting: {error}");
