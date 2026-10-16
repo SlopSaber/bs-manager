@@ -23,8 +23,16 @@ static CACHE: OnceLock<Mutex<CacheIndex>> = OnceLock::new();
 
 #[derive(Default)]
 struct CacheIndex {
-    by_hash: HashMap<String, Arc<Value>>,
-    by_id: HashMap<String, Arc<Value>>,
+    songs: Vec<CachedSong>,
+    uploaders: RawUploaders,
+    difficulty_labels: Vec<String>,
+    by_hash: HashMap<Arc<str>, usize>,
+    by_id: HashMap<String, usize>,
+}
+
+struct CachedSong {
+    hash: Arc<str>,
+    raw: RawSong,
 }
 
 #[derive(Clone, PartialEq, Message)]
@@ -212,13 +220,15 @@ pub async fn initialize<R: Runtime>(app: &AppHandle<R>) {
 }
 
 pub fn by_hash(hash: &str) -> Option<Value> {
-    CACHE.get_or_init(|| Mutex::new(CacheIndex::default())).lock().ok()?
-        .by_hash.get(&hash.to_ascii_lowercase()).map(|details| details.as_ref().clone())
+    let cache = CACHE.get_or_init(|| Mutex::new(CacheIndex::default())).lock().ok()?;
+    let index = *cache.by_hash.get(hash.to_ascii_lowercase().as_str())?;
+    cache.details(index)
 }
 
 pub fn by_id(id: &str) -> Option<Value> {
-    CACHE.get_or_init(|| Mutex::new(CacheIndex::default())).lock().ok()?
-        .by_id.get(&id.to_ascii_lowercase()).map(|details| details.as_ref().clone())
+    let cache = CACHE.get_or_init(|| Mutex::new(CacheIndex::default())).lock().ok()?;
+    let index = *cache.by_id.get(&id.to_ascii_lowercase())?;
+    cache.details(index)
 }
 
 async fn initialize_inner<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
@@ -347,17 +357,36 @@ fn decode_gzip_cache(compressed: &[u8]) -> Result<(Vec<u8>, CacheIndex), String>
 
 fn decode_cache(bytes: &[u8]) -> Result<CacheIndex, String> {
     let cache = RawCache::decode(bytes).map_err(|error| error.to_string())?;
-    let uploaders = cache.uploaders.unwrap_or_default();
-    let mut index = CacheIndex::default();
-    for song in cache.songs {
-        let hash = song.hash_indices.iter()
-            .filter_map(|value| char::from_digit(*value, 16))
-            .collect::<String>();
+    let mut index = CacheIndex {
+        songs: Vec::with_capacity(cache.songs.len()),
+        uploaders: cache.uploaders.unwrap_or_default(),
+        difficulty_labels: cache.difficulty_labels,
+        by_hash: HashMap::with_capacity(cache.songs.len()),
+        by_id: HashMap::with_capacity(cache.songs.len()),
+    };
+    for mut song in cache.songs {
+        let hash: Arc<str> = std::mem::take(&mut song.hash_indices).into_iter()
+            .filter_map(|value| char::from_digit(value, 16))
+            .collect::<String>().into();
         let id = format!("{:x}", song.id_int);
-        let uploader = song.uploader_ref.unwrap_or(RawUploaderRef { uploader_ref_index: 0, verified: false });
+        let song_index = index.songs.len();
+        index.by_hash.insert(hash.clone(), song_index);
+        index.by_id.insert(id, song_index);
+        index.songs.push(CachedSong { hash, raw: song });
+    }
+    Ok(index)
+}
+
+impl CacheIndex {
+    // Keep the catalog in protobuf records; allocate JSON only for requested songs.
+    fn details(&self, index: usize) -> Option<Value> {
+        let cached = self.songs.get(index)?;
+        let song = &cached.raw;
+        let uploader = song.uploader_ref.as_ref().cloned()
+            .unwrap_or(RawUploaderRef { uploader_ref_index: 0, verified: false });
         let uploader_index = uploader.uploader_ref_index as usize;
-        let difficulties = song.difficulties.into_iter().map(|difficulty| {
-            let label = cache.difficulty_labels.get(difficulty.label_index as usize).cloned().unwrap_or_default();
+        let difficulties = song.difficulties.iter().map(|difficulty| {
+            let label = self.difficulty_labels.get(difficulty.label_index as usize).cloned().unwrap_or_default();
             json!({
                 "difficulty": difficulty_name(difficulty.difficulty),
                 "characteristic": characteristic_name(difficulty.characteristic),
@@ -376,15 +405,15 @@ fn decode_cache(bytes: &[u8]) -> Result<CacheIndex, String> {
                 "obstacles": difficulty.obstacles,
             })
         }).collect::<Vec<_>>();
-        let tags = song.tags.into_iter().filter_map(tag_name).collect::<Vec<_>>();
-        let details = json!({
-            "id": id,
-            "hash": hash,
+        let tags = song.tags.iter().copied().filter_map(tag_name).collect::<Vec<_>>();
+        Some(json!({
+            "id": format!("{:x}", song.id_int),
+            "hash": cached.hash.as_ref(),
             "name": song.name,
             "duration": song.duration,
             "uploader": {
-                "name": uploaders.names.get(uploader_index).cloned().unwrap_or_default(),
-                "id": uploaders.ids.get(uploader_index).copied().unwrap_or_default(),
+                "name": self.uploaders.names.get(uploader_index).cloned().unwrap_or_default(),
+                "id": self.uploaders.ids.get(uploader_index).copied().unwrap_or_default(),
                 "verified": uploader.verified,
             },
             "uploadedAt": song.uploaded_at,
@@ -399,12 +428,8 @@ fn decode_cache(bytes: &[u8]) -> Result<CacheIndex, String> {
             "downloads": song.downloads,
             "automapper": song.automapper,
             "difficulties": difficulties,
-        });
-        let details = Arc::new(details);
-        index.by_hash.insert(details["hash"].as_str().unwrap_or_default().to_ascii_lowercase(), details.clone());
-        index.by_id.insert(id.to_ascii_lowercase(), details);
+        }))
     }
-    Ok(index)
 }
 
 fn difficulty_name(value: i32) -> &'static str {
