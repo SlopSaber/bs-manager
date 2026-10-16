@@ -58,9 +58,6 @@ export const ModsSlide = forwardRef<ModsSlideRef, Props>(({ version, isActive, o
     const modsAvailable = useMemo(() => modsState && modsToCategoryMap(modsState.mods), [modsState]);
     const modsInstalled = useMemo(() => modsState && modsToCategoryMap(modsState.installed), [modsState]);
 
-    const modsAvailable = useMemo(() => modsState && modsToCategoryMap(modsState.mods), [modsState]);
-    const modsInstalled = useMemo(() => modsState && modsToCategoryMap(modsState.installed), [modsState]);
-
     const handleModChange = (selected: boolean, mod: BbmFullMod) => {
 
         if (selected) {
