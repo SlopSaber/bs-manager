@@ -5,6 +5,7 @@ import "tailwindcss/tailwind.css";
 import "./index.css";
 import { IpcService } from "./services/ipc.service";
 import { ThemeService } from "./services/theme.service";
+import { serializeError } from "serialize-error";
 
 const launcherContainer = document.getElementById("launcher");
 const oneclickDownloadMapContainer = document.getElementById("oneclick-download-map");
@@ -16,8 +17,9 @@ const ipc = IpcService.getInstance();
 const themeService = ThemeService.getInstance();
 
 window.onerror = (...data) => {
-    logRenderError(data);
+    logRenderError(...data);
 };
+window.addEventListener("unhandledrejection", event => logRenderError(event.reason));
 
 document.addEventListener("DOMContentLoaded", () => {
     themeService.theme$.subscribe(() => {
@@ -60,7 +62,7 @@ if (launcherContainer) {
 }
 
 export function logRenderError(...params: unknown[]){
-    ipc.sendLazy("log-error", { args: params });
+    ipc.sendLazy("log-error", { args: params.map(value => value instanceof Error ? serializeError(value) : value) });
 }
 
 export function addFilterStringLog(str: string){

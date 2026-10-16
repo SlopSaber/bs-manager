@@ -1274,6 +1274,20 @@ async fn handle_request<R: Runtime>(
                 .show().map_err(|error| serialized_error(error.to_string(), "NOTIFICATION_FAILED"))?;
             Ok(Value::Null)
         }
+        "log-error" | "add-filter-string" | "add-filter-pattern" => handle_logging_route(app, channel, &args),
+        "get-window-args" => {
+            let label = window.label().to_owned();
+            let state = app.state::<AppState>();
+            let args = state.window_arguments.lock().map_err(|_| serialized_error("Window state is unavailable", "WINDOW_FAILED"))?
+                .get(&label).cloned().unwrap_or_else(|| json!({}));
+            Ok(args)
+        }
+        _ => Err(serialized_error(format!("This Windows Tauri app does not implement '{channel}'"), "NOT_IMPLEMENTED")),
+    }
+}
+
+fn handle_logging_route<R: Runtime>(app: &AppHandle<R>, channel: &str, args: &Value) -> Result<Value, SerializedError> {
+    match channel {
         "log-error" => { log::error!("Renderer error: {args}"); Ok(Value::Null) }
         "add-filter-string" => {
             let secret = args.as_str().ok_or_else(|| serialized_error("Log redaction value must be a string", "INVALID_LOG_FILTER"))?;
@@ -1289,14 +1303,7 @@ async fn handle_request<R: Runtime>(
                 .add_pattern(source)?;
             Ok(Value::Null)
         }
-        "get-window-args" => {
-            let label = window.label().to_owned();
-            let state = app.state::<AppState>();
-            let args = state.window_arguments.lock().map_err(|_| serialized_error("Window state is unavailable", "WINDOW_FAILED"))?
-                .get(&label).cloned().unwrap_or_else(|| json!({}));
-            Ok(args)
-        }
-        _ => Err(serialized_error(format!("This Windows Tauri app does not implement '{channel}'"), "NOT_IMPLEMENTED")),
+        _ => Err(serialized_error("Unknown logging route", "UNKNOWN_ROUTE")),
     }
 }
 
@@ -1308,14 +1315,14 @@ async fn run_ipc_route<R: Runtime>(
     response_id: Option<String>,
     cancelled: Arc<AtomicBool>,
 ) {
-    let result = handle_request(
+    let result = Box::pin(handle_request(
         app,
         window,
         &channel,
         args,
         response_id.as_deref(),
         cancelled,
-    ).await;
+    )).await;
     let should_restart = channel == "restart-app" && result.is_ok();
     if response_id.is_none() {
         if let Err(error) = &result {
@@ -1373,12 +1380,21 @@ fn request<R: Runtime>(
 }
 
 #[tauri::command]
-async fn send_lazy<R: Runtime>(app: AppHandle<R>, window: WebviewWindow<R>, channel: String, args: Option<Value>) {
+fn send_lazy<R: Runtime>(app: AppHandle<R>, window: WebviewWindow<R>, channel: String, args: Option<Value>) {
     if !is_application_window(window.label()) {
         log::warn!("Rejected one-way IPC route '{channel}' from window '{}'", window.label());
         return;
     }
-    run_ipc_route(&app, &window, channel, args.unwrap_or(Value::Null), None, Arc::new(AtomicBool::new(false))).await;
+    let args = args.unwrap_or(Value::Null);
+    if matches!(channel.as_str(), "log-error" | "add-filter-string" | "add-filter-pattern") {
+        if let Err(error) = handle_logging_route(&app, &channel, &args) {
+            log::warn!("Windows Tauri one-way route '{channel}' failed: {}", error.message);
+        }
+        return;
+    }
+    tauri::async_runtime::spawn(async move {
+        run_ipc_route(&app, &window, channel, args, None, Arc::new(AtomicBool::new(false))).await;
+    });
 }
 
 #[tauri::command]
