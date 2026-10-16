@@ -197,7 +197,7 @@ Linux Proton routes are intentionally outside this Windows-only rewrite: `linux.
 - [ ] Default download store: Steam, Meta/Oculus, and ask each time.
 - [ ] Theme: dark, light, and operating-system preference.
 - [ ] First and second custom colors, including reset-to-default.
-- [ ] Preview import v5 restores missing legacy static settings and renderer preferences, launch options, download-store selection, audio level, and dismissal choices; preserves settings already changed in Preview; and refreshes installed versions. Last-launched version lookup treats missing store flags as false. Legacy encrypted Meta tokens prompt for login again.
+- [ ] Preview import v6 restores missing legacy static settings and renderer preferences, launch options, download-store selection, audio level, and dismissal choices from a v5 installation; preserves settings already changed in Preview; and refreshes installed versions. Last-launched version lookup treats missing store flags as false. Legacy encrypted Meta tokens prompt for login again.
 - [ ] Custom version colors remain available from the shared library `config.cfg` in Preview and Replacement, including Preview while legacy BSManager is open; version, map, playlist, and model scans must not create or rewrite shared library files during that session.
 - [ ] Installation path edit, browse, validation, apply, and move existing installation.
 - [ ] Deep-link selection: all, Maps, Playlists plus `.bplist`, and Models; registration changes persist and uninstall restores only registrations still owned by profile.
@@ -211,12 +211,12 @@ Linux Proton routes are intentionally outside this Windows-only rewrite: `linux.
 
 - [x] Preview settings-import failures are logged and shown as an in-app error notification so a failed import is visible and can be retried on a later launch.
 - [x] Read-only post-install audit on 2026-10-16 found local Preview executable `2.0.0-f77b1389` (SHA-256 `7FECF9BD82E275541F0D32FFD35AC5FD2B81CD1046E07355AE8811D41EF74FB9`). It predates the available `2.0.0-011ec9bd` installer. The app log records an earlier `steam-session-exists` `NOT_IMPLEMENTED` error at 06:59 UTC, then startup readiness at 08:13 UTC; the audit did not launch the app.
-- [x] The post-install log records 14 non-secret legacy renderer preferences imported at 08:13 UTC. Preview settings show legacy import complete and renderer-import marker version 5. At the time of that audit, the installed `2.0.0-f77b1389` executable had not been replaced by the then-available `2.0.0-011ec9bd` installer. The current `2.0.0-5c53fe7a` installers have since been built; runtime behavior remains unverified.
+- [x] The post-install log records 14 non-secret legacy renderer preferences imported at 08:13 UTC. Preview settings show legacy import complete and renderer-import marker version 5. At the time of that audit, the installed `2.0.0-f77b1389` executable had not been replaced by the then-available `2.0.0-011ec9bd` installer. The current `2.0.0-421e4aac` installers have since been built; runtime behavior remains unverified.
 - [x] A read-only LevelDB key-name comparison found all 14 imported keys in both legacy and Preview storage, including `first-color`, `second-color`, launch settings, store selection, audio level, and dismissal choices. No stored values were recorded; runtime display remains pending.
 - [x] Read-only local data audit found legacy `config.json` and renderer LevelDB present; Preview selects `D:\` and uses library `D:\BSManager`. `D:\BSManager\config.cfg` contains one custom color record for Beat Saber `1.45.2` (`#45ffac`, default folder name); matching `BSInstances\1.45.2` contains `Beat Saber.exe` and `Beat Saber_Data\globalgamemanagers` with version string `1.45.2`. Color source and scan inputs are present; display in packaged app remains pending.
 - [x] Static migration-path audit confirms Preview stores settings separately, imports legacy `config.json` while retaining existing Preview values, and reads allow-listed renderer preferences from legacy LevelDB. Installed custom-version colors are read from the selected library's `config.cfg` by game-version/name. Runtime import and color display remain unverified.
 - [x] Replacement renderer migration reads the same allow-listed legacy LevelDB preferences, fills only missing Tauri localStorage keys, stores its completion marker under the replacement profile's app-config directory, and leaves legacy `config.json` untouched. Import remains idempotent and retries if interrupted before marker completion; runtime behavior remains unchecked.
-- [ ] Install `2.0.0-5c53fe7a` and confirm Preview startup, Steam login state, imported settings, the `1.45.2` version color, and the Settings crash fix. Existing Preview import marker is already version 5, so this install will not prompt for the same import again.
+- [ ] Install `2.0.0-421e4aac` and confirm Preview startup, Steam login state, imported settings, the `1.45.2` version color, and the Settings crash fix. The v5 Preview marker should trigger the v6 import prompt once.
 - [ ] Steam password, QR, Steam Guard, remembered session, resume, CDN failover, verification, progress, input, cancel, and retry.
 - [ ] Meta login cookie capture, remembered session, expired credential, logout, manifest download, decompression, integrity failure, resume, and cancel.
 - [ ] Steam and Meta launch, VR detection/warning, arguments/environment, elevation denied, process tracking, close-on-launch, and LIV integration.
@@ -224,7 +224,7 @@ Linux Proton routes are intentionally outside this Windows-only rewrite: `linux.
 - [ ] Mod dependencies, import/install/uninstall, maps and playlists, model operations, search/filter/sort, archives, sharing, caches, and audio previews.
 - [ ] Deep links, `.bplist`, native file drop, playlist drag-and-drop, and external links.
 - [ ] Offline services, corrupt archive, inaccessible destination, interrupted operation, network retry, and app/window closure during a cancellable operation.
-- [ ] Preview first-run and v5 settings import copies configuration only, reuses selected library paths, keeps separate settings, and blocks shared-content mutations while legacy Electron runs. Version colors stay in shared library `config.cfg`; Preview scans read it without writing or creating missing content folders while Electron is open.
+- [ ] Preview first-run and v6 settings import copies configuration only, reuses selected library paths, keeps separate settings, and blocks shared-content mutations while legacy Electron runs. Version colors stay in shared library `config.cfg`; Preview scans read it without writing or creating missing content folders while Electron is open.
 - [ ] Replacement first-run imports allow-listed legacy renderer preferences into its separate WebView storage, preserves any values already set there, leaves Electron `config.json` and LevelDB untouched, and retries an interrupted import without showing Preview's import modal.
 - [ ] Preview Steam password/QR/Steam Guard download works while legacy Electron BSManager remains open, uses a separate staging and final version folder, and resumes an interrupted staged download after Electron closes.
 - [x] On 2026-10-16, source comparison found all 119 bundled version records, fields, and ordering match [upstream `bs-versions.json`](https://raw.githubusercontent.com/Zagrios/bs-manager/master/assets/jsons/bs-versions.json).
@@ -240,7 +240,7 @@ Linux Proton routes are intentionally outside this Windows-only rewrite: `linux.
 - [ ] Compare baseline and Tauri at 100%, 125%, and 150% Windows display scaling.
 - [ ] Compare light, dark, OS theme, and custom colors.
 - [ ] Compare main window at default, minimum, and maximized sizes; review all six app windows.
-- [ ] Confirm Preview displays the Preview title-bar tag and `v2.0.0-5c53fe7a` link, which opens commit `5c53fe7a` on the fork; Replacement does not show the Preview tag.
+- [ ] Confirm Preview displays the Preview title-bar tag and `v2.0.0-421e4aac` link, which opens commit `421e4aac` on the fork; Replacement does not show the Preview tag.
 - [ ] Compare setup, library, version tabs, shared content, settings, dialogs, animations, fonts, icons, spacing, typography, and scroll behavior.
 - [ ] Record any remaining WebView2 rendering differences with matching baseline and Tauri captures supplied or initiated by the user.
 
@@ -248,9 +248,9 @@ Linux Proton routes are intentionally outside this Windows-only rewrite: `linux.
 
 - [ ] Confirm preview and replacement NSIS install/uninstall, WebView2 bootstrapper, shortcuts, and elevation behavior.
 - [ ] Confirm replacement rollback backup paths and `migration.json` contents before relying on installer recovery.
-- [x] Built Preview from commit `5c53fe7a` with temporary version `2.0.0-5c53fe7a`: `release/tauri/preview/BSManager-Preview-2.0.0-5c53fe7a-x64-setup.exe` (10,730,867 bytes), SHA-256 `52B948B26AE87FDF551F41CA32FCD806F71B2B0576283182B228402484DAF89A`, Authenticode `NotSigned`.
-- [x] Built Replacement from commit `5c53fe7a` with temporary version `2.0.0-5c53fe7a`: `release/tauri/replacement/BSManager-2.0.0-5c53fe7a-x64-setup.exe` (10,728,897 bytes), SHA-256 `14D47C72FD020CB83B60B0ACB55D1D34AD8EE9662A59EB213E9E2915BA00949E`, Authenticode `NotSigned`.
+- [x] Built Preview from commit `421e4aac` with temporary version `2.0.0-421e4aac`: `release/tauri/preview/BSManager-Preview-2.0.0-421e4aac-x64-setup.exe` (10,733,172 bytes), SHA-256 `5957B3706D9D0EA50B8342D1D3A5DB9E42465442305C8AED122BBEE02C78F7D3`, Authenticode `NotSigned`.
+- [x] Built Replacement from commit `421e4aac` with temporary version `2.0.0-421e4aac`: `release/tauri/replacement/BSManager-2.0.0-421e4aac-x64-setup.exe` (10,730,909 bytes), SHA-256 `CC00CD48D91BBCC1B3E4E95D02496039C7CC4F42F727439492261CB75D6FBD4C`, Authenticode `NotSigned`.
 - [x] The Tauri UI contract TypeScript compilation, Vite production build, Rust helper builds, and Rust application builds completed for both profiles. The temporary version was removed from `package.json`, `Cargo.toml`, `Cargo.lock`, and `tauri.conf.json` after packaging; these source files remain at `2.0.0`.
-- [x] Title-bar source displays the backend version and links a hash suffix to `https://github.com/SlopSaber/bs-manager/commit/<hash>`. The compiled executable reports product version `2.0.0-5c53fe7a`; runtime display and link behavior remain unreviewed.
-- [x] Earlier `2.0.0-011ec9bd` NSIS archives were inspected with 7-Zip. The current `5c53fe7a` archives have not yet been inspected or installed.
-- [ ] User installs `2.0.0-5c53fe7a` Preview and confirms installer writes the bundled catalog successfully, then reviews startup, settings migration, the Settings crash fix, and version colors.
+- [x] Title-bar source displays the backend version and links a hash suffix to `https://github.com/SlopSaber/bs-manager/commit/<hash>`. The compiled executable reports product version `2.0.0-421e4aac`; runtime display and link behavior remain unreviewed.
+- [x] Earlier `2.0.0-011ec9bd` NSIS archives were inspected with 7-Zip. The current `421e4aac` archives have not yet been inspected or installed.
+- [ ] User installs `2.0.0-421e4aac` Preview and confirms installer writes the bundled catalog successfully, then reviews startup, settings migration, the Settings crash fix, and version colors.
