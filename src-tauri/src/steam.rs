@@ -718,7 +718,10 @@ pub async fn session_username<R: Runtime>(app: &AppHandle<R>) -> Result<Option<S
 }
 
 pub async fn session_exists<R: Runtime>(app: &AppHandle<R>) -> Result<bool, SerializedError> {
-    Ok(load_session_username(app).await?.is_some())
+    let Some(username) = load_session_username(app).await? else {
+        return Ok(false);
+    };
+    Ok(load_session(app, &username).await.is_some())
 }
 
 pub async fn import_legacy_username<R: Runtime>(app: &AppHandle<R>, username: &str) -> Result<(), SerializedError> {
