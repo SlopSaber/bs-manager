@@ -226,7 +226,7 @@ async fn download_inner<R: Runtime>(
                 let target = destination.join(relative);
                 ensure_safe_parent(&destination, &target).await?;
                 let target_exists = validate_file_target(&target).await?;
-                if target_exists && file_integrity_valid(&target, &file.sha256, file.size).await.unwrap_or(false) {
+                if target_exists && file_integrity_valid(&target, &file.sha256, file.size, &control).await? {
                     advance_progress(&window, response_channel.as_deref(), &current, file.size, total, &version).await?;
                     return Ok::<(), SerializedError>(());
                 }
@@ -255,7 +255,7 @@ async fn download_inner<R: Runtime>(
                     output.sync_all().await
                         .map_err(|error| serialized_error(error.to_string(), "DOWNLOAD_FILE_FAILED"))?;
                     drop(output);
-                    if written != file.size || !file_integrity_valid(&staged, &file.sha256, file.size).await.unwrap_or(false) {
+                    if written != file.size || !file_integrity_valid(&staged, &file.sha256, file.size, &control).await? {
                         return Err(serialized_error(format!("File integrity check failed: {name}"), "FILE_INTEGRITY_FAILED"));
                     }
                     replace_download_file(&staged, &target, &control).await
@@ -532,7 +532,13 @@ async fn replace_download_file(
     Ok(())
 }
 
-async fn file_integrity_valid(path: &Path, expected_hash: &str, expected_size: u64) -> Result<bool, SerializedError> {
+async fn file_integrity_valid(
+    path: &Path,
+    expected_hash: &str,
+    expected_size: u64,
+    control: &OculusControl,
+) -> Result<bool, SerializedError> {
+    check_cancelled(control)?;
     let mut file = match tokio::fs::File::open(path).await {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
@@ -546,8 +552,11 @@ async fn file_integrity_valid(path: &Path, expected_hash: &str, expected_size: u
     let mut hasher = Sha256::new();
     let mut buffer = vec![0_u8; 1024 * 1024];
     loop {
-        let read = file.read(&mut buffer).await
-            .map_err(|error| serialized_error(error.to_string(), "FILE_READ_FAILED"))?;
+        let read = tokio::select! {
+            result = file.read(&mut buffer) => result
+                .map_err(|error| serialized_error(error.to_string(), "FILE_READ_FAILED"))?,
+            _ = poll_cancelled(control) => return Err(cancellation_error(control)),
+        };
         if read == 0 { break; }
         hasher.update(&buffer[..read]);
     }
