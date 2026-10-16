@@ -51,6 +51,13 @@ export class ConfigurationService {
         this.emitChange(key);
     }
 
+    public importSerializedIfMissing(key: string, serializedValue: string): void {
+        if (window.localStorage.getItem(key) == null) {
+            window.localStorage.setItem(key, serializedValue);
+        }
+        this.emitChange(key);
+    }
+
     public delete(key: string | DefaultConfigKey) {
         window.localStorage.removeItem(key);
         window.sessionStorage.removeItem(key);

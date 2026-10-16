@@ -53,7 +53,8 @@ export interface IpcChannelMapping {
     "bs-installer.install-path": { request: void, response: string};
     "bs-installer.set-install-path": { request: { path: string, move: boolean }, response: string};
     "preview.legacy-settings-import-needed": { request: void, response: boolean };
-    "preview.import-legacy-settings": { request: void, response: void };
+    "preview.import-legacy-settings": { request: void, response: Record<string, string> };
+    "preview.complete-renderer-settings-import": { request: void, response: void };
     "preview.skip-legacy-settings-import": { request: void, response: void };
 
     /* ** bs-launcher-ipcs ** */

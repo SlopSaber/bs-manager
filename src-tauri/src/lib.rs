@@ -32,12 +32,14 @@ mod protocols;
 mod proxy;
 mod map_info_cache;
 mod song_cache;
+mod legacy_storage;
 
 const VERSION_LIBRARY: &str = include_str!("../../assets/jsons/bs-versions.json");
 const SUPPORTERS: &str = include_str!("../../assets/jsons/patreons.json");
 const INSTALL_FOLDER: &str = "BSManager";
 const LEGACY_APP_DIRECTORY: &str = "bs-manager";
 const PREVIEW_IMPORT_MARKER: &str = "preview-legacy-settings-import";
+const PREVIEW_RENDERER_IMPORT_MARKER: &str = "preview-renderer-settings-import";
 const MAX_UPDATE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
 #[derive(Default)]
@@ -152,21 +154,33 @@ fn legacy_settings_path<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, Strin
         .map_err(|error| error.to_string())
 }
 
+fn legacy_local_storage_path<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
+    app.path().config_dir()
+        .map(|directory| directory.join(LEGACY_APP_DIRECTORY).join("Local Storage").join("leveldb"))
+        .map_err(|error| error.to_string())
+}
+
 fn preview_settings_import_needed<R: Runtime>(app: &AppHandle<R>) -> Result<bool, String> {
     if app.config().identifier != "io.bsmanager.bsmanager.preview" {
         return Ok(false);
     }
 
-    if read_settings(app)?.contains_key(PREVIEW_IMPORT_MARKER) {
+    let settings = read_settings(app)?;
+    if settings.contains_key(PREVIEW_RENDERER_IMPORT_MARKER) {
         return Ok(false);
+    }
+    let has_renderer_settings = legacy_local_storage_path(app)?.join("CURRENT").is_file();
+    if let Some(status) = settings.get(PREVIEW_IMPORT_MARKER).and_then(Value::as_str) {
+        return Ok(status != "skipped" && has_renderer_settings);
     }
 
     let legacy_path = legacy_settings_path(app)?;
-    match fs::metadata(legacy_path) {
-        Ok(metadata) => Ok(metadata.is_file()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(format!("Could not inspect legacy settings: {error}")),
-    }
+    let has_legacy_settings = match fs::metadata(legacy_path) {
+        Ok(metadata) => metadata.is_file(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => return Err(format!("Could not inspect legacy settings: {error}")),
+    };
+    Ok(has_legacy_settings || has_renderer_settings)
 }
 
 fn import_legacy_settings<R: Runtime>(app: &AppHandle<R>, import: bool) -> Result<(), String> {
@@ -178,23 +192,35 @@ fn import_legacy_settings<R: Runtime>(app: &AppHandle<R>, import: bool) -> Resul
         return Ok(());
     }
 
-    let mut settings = if import {
-        let legacy_path = legacy_settings_path(app)?;
-        let contents = fs::read(&legacy_path).map_err(|error| format!("Could not read legacy settings: {error}"))?;
-        serde_json::from_slice::<Map<String, Value>>(&contents)
-            .map_err(|error| format!("Could not read legacy settings: {error}"))?
-    } else {
-        read_settings(app)?
-    };
-
+    let mut settings = read_settings(app)?;
     if import {
-        let preview_settings = read_settings(app)?;
-        settings.extend(preview_settings);
+        let legacy_path = legacy_settings_path(app)?;
+        if legacy_path.is_file() {
+            let contents = fs::read(&legacy_path).map_err(|error| format!("Could not read legacy settings: {error}"))?;
+            let mut legacy = serde_json::from_slice::<Map<String, Value>>(&contents)
+                .map_err(|error| format!("Could not read legacy settings: {error}"))?;
+            legacy.extend(settings);
+            settings = legacy;
+        }
+        settings.insert(PREVIEW_IMPORT_MARKER.to_owned(), json!("imported"));
+    } else {
+        if !settings.get(PREVIEW_IMPORT_MARKER).and_then(Value::as_str).is_some_and(|status| status == "imported") {
+            settings.insert(PREVIEW_IMPORT_MARKER.to_owned(), json!("skipped"));
+        }
+        settings.insert(PREVIEW_RENDERER_IMPORT_MARKER.to_owned(), json!("skipped"));
     }
-    settings.insert(PREVIEW_IMPORT_MARKER.to_owned(), json!(if import { "imported" } else { "skipped" }));
     write_settings(app, &settings)?;
     proxy::set_enabled(settings.get("use-system-proxy").and_then(Value::as_bool).unwrap_or(false));
     Ok(())
+}
+
+fn complete_legacy_renderer_settings_import<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    if app.config().identifier != "io.bsmanager.bsmanager.preview" {
+        return Err("Legacy renderer settings import is only available in the preview profile".to_owned());
+    }
+    let mut settings = read_settings(app)?;
+    settings.insert(PREVIEW_RENDERER_IMPORT_MARKER.to_owned(), json!("imported"));
+    write_settings(app, &settings)
 }
 
 fn read_settings<R: Runtime>(app: &AppHandle<R>) -> Result<Map<String, Value>, String> {
@@ -902,7 +928,21 @@ async fn handle_request<R: Runtime>(
             if window.label() != "main" {
                 return Err(serialized_error("Legacy settings import is only available in the main window", "WINDOW_NOT_ALLOWED"));
             }
+            let source = legacy_local_storage_path(app).map_err(|error| serialized_error(error, "SETTINGS_IMPORT_FAILED"))?;
+            let cache = app.path().app_cache_dir().map_err(|error| serialized_error(error.to_string(), "SETTINGS_IMPORT_FAILED"))?;
+            let renderer_settings = tokio::task::spawn_blocking(move || legacy_storage::read_preferences(&source, &cache))
+                .await
+                .map_err(|error| serialized_error(format!("Legacy preference reader failed: {error}"), "SETTINGS_IMPORT_FAILED"))?
+                .map_err(|error| serialized_error(error, "SETTINGS_IMPORT_FAILED"))?;
             import_legacy_settings(app, true).map_err(|error| serialized_error(error, "SETTINGS_IMPORT_FAILED"))?;
+            Ok(json!(renderer_settings))
+        }
+        "preview.complete-renderer-settings-import" => {
+            if window.label() != "main" {
+                return Err(serialized_error("Legacy settings import is only available in the main window", "WINDOW_NOT_ALLOWED"));
+            }
+            complete_legacy_renderer_settings_import(app)
+                .map_err(|error| serialized_error(error, "SETTINGS_IMPORT_FAILED"))?;
             Ok(Value::Null)
         }
         "preview.skip-legacy-settings-import" => {

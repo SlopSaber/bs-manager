@@ -290,7 +290,7 @@ fn is_link(path: &Path) -> bool {
 
 fn remove_link(path: &Path) -> io::Result<()> {
     #[cfg(windows)]
-    if junction::exists(path)? {
+    if crate::library::junction_exists(path)? {
         return junction::delete(path);
     }
     if !fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_symlink()) {

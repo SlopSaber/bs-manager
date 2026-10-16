@@ -184,6 +184,17 @@ pub fn remove_library(path: &Path) -> io::Result<()> {
     windows_library::remove_entry(path)
 }
 
+#[cfg(windows)]
+const ERROR_NOT_A_REPARSE_POINT: i32 = 0x1126;
+
+#[cfg(windows)]
+pub(crate) fn junction_exists(path: &Path) -> io::Result<bool> {
+    match junction::exists(path) {
+        Err(error) if error.raw_os_error() == Some(ERROR_NOT_A_REPARSE_POINT) => Ok(false),
+        result => result,
+    }
+}
+
 #[cfg(not(windows))]
 pub fn remove_library(_path: &Path) -> io::Result<()> {
     Err(io::Error::new(io::ErrorKind::Unsupported, "Library relocation is available only on Windows"))
@@ -269,7 +280,7 @@ mod windows_library {
     fn copy_entry(source_root: &Path, destination_root: &Path, source: &Path, destination: &Path, cancelled: &AtomicBool) -> io::Result<()> {
         check_copy_cancelled(cancelled)?;
         let metadata = fs::symlink_metadata(source)?;
-        if junction::exists(source)? {
+        if super::junction_exists(source)? {
             let target = junction::get_target(source)?;
             return copy_junction(source_root, destination_root, &target, destination, cancelled);
         }
@@ -367,7 +378,7 @@ mod windows_library {
     }
 
     fn remove_destination_link(path: &Path) -> io::Result<()> {
-        if junction::exists(path)? {
+        if super::junction_exists(path)? {
             junction::delete(path)?;
             return Ok(());
         }
@@ -381,7 +392,7 @@ mod windows_library {
     }
 
     pub fn remove_entry(path: &Path) -> io::Result<()> {
-        if junction::exists(path)? {
+        if super::junction_exists(path)? {
             return junction::delete(path);
         }
         let metadata = match fs::symlink_metadata(path) {

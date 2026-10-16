@@ -290,9 +290,8 @@ pub fn get_installed_versions<R: Runtime>(app: &AppHandle<R>) -> Result<Value, S
         let metadata = read_or_create_metadata(&path);
         object.insert("metadata".into(), metadata);
 
-        let current_name = object.get("name").cloned();
         if let Some(custom) = custom_versions.iter().find(|custom| {
-            custom.get("BSVersion") == object.get("BSVersion") && custom.get("name").cloned() == current_name
+            same_version_identity_parts(custom, object.get("BSVersion"), object.get("name"))
         }) {
             if let Some(color) = custom.get("color") {
                 object.insert("color".into(), color.clone());
@@ -568,7 +567,12 @@ fn remove_custom_version(root: &Path, removed: &Value) -> io::Result<()> {
 }
 
 fn same_version_identity(left: &Value, right: &Value) -> bool {
-    left.get("BSVersion") == right.get("BSVersion") && left.get("name") == right.get("name")
+    same_version_identity_parts(left, right.get("BSVersion"), right.get("name"))
+}
+
+fn same_version_identity_parts(left: &Value, version: Option<&Value>, name: Option<&Value>) -> bool {
+    left.get("BSVersion") == version
+        && left.get("name").and_then(Value::as_str) == name.and_then(Value::as_str)
 }
 
 fn update_last_launched_version<R: Runtime>(app: &AppHandle<R>, previous: &Value, updated: &Value) -> Result<(), SerializedError> {

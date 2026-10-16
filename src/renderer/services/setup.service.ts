@@ -3,6 +3,7 @@ import { logRenderError } from "renderer";
 
 import { BSVersionManagerService } from "./bs-version-manager.service";
 import { InstallationLocationService } from "./installation-location.service";
+import { ConfigurationService } from "./configuration.service";
 import { IpcService } from "./ipc.service";
 import { ModalService } from "./modale.service";
 
@@ -60,7 +61,12 @@ export class SetupService {
             );
 
             if (response.data === "import") {
-                await lastValueFrom(this.ipcService.sendV2("preview.import-legacy-settings"));
+                const imported = await lastValueFrom(this.ipcService.sendV2("preview.import-legacy-settings"));
+                const configurationService = ConfigurationService.getInstance();
+                for (const [key, value] of Object.entries(imported)) {
+                    configurationService.importSerializedIfMissing(key, value);
+                }
+                await lastValueFrom(this.ipcService.sendV2("preview.complete-renderer-settings-import"));
             } else {
                 await lastValueFrom(this.ipcService.sendV2("preview.skip-legacy-settings-import"));
             }
