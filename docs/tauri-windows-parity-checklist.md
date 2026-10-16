@@ -206,8 +206,9 @@ Linux Proton routes are intentionally outside this Windows-only rewrite: `linux.
 
 ## Feature and failure scenarios
 
-- [x] Current local Preview executable is `2.0.0-2b24094b`; its 2026-10-15 log records `steam-session-exists` as `NOT_IMPLEMENTED`. Build `2.0.0-41d43873` includes the Rust handler, where a missing `username.json` returns `false`.
-- [ ] Install `2.0.0-41d43873` and confirm Preview startup no longer logs that route error and Steam login state remains stable.
+- [x] Preview settings-import failures are logged and shown as an in-app error notification so a failed import is visible and can be retried on a later launch.
+- [x] Current local Preview executable remains `2.0.0-2b24094b`; its 2026-10-15 log records `steam-session-exists` as `NOT_IMPLEMENTED`. Build `2.0.0-f77b1389` includes the Rust handler, where a missing `username.json` returns `false`.
+- [ ] Install `2.0.0-f77b1389` and confirm Preview startup no longer logs that route error, Steam login state remains stable, and legacy settings import works.
 - [ ] Steam password, QR, Steam Guard, remembered session, resume, CDN failover, verification, progress, input, cancel, and retry.
 - [ ] Meta login cookie capture, remembered session, expired credential, logout, manifest download, decompression, integrity failure, resume, and cancel.
 - [ ] Steam and Meta launch, VR detection/warning, arguments/environment, elevation denied, process tracking, close-on-launch, and LIV integration.
@@ -230,7 +231,7 @@ Linux Proton routes are intentionally outside this Windows-only rewrite: `linux.
 - [ ] Compare baseline and Tauri at 100%, 125%, and 150% Windows display scaling.
 - [ ] Compare light, dark, OS theme, and custom colors.
 - [ ] Compare main window at default, minimum, and maximized sizes; review all six app windows.
-- [ ] Confirm Preview displays the Preview title-bar tag and Replacement does not.
+- [ ] Confirm Preview displays the Preview title-bar tag and `v2.0.0-f77b1389` link, which opens the matching fork commit; Replacement does not show the Preview tag.
 - [ ] Compare setup, library, version tabs, shared content, settings, dialogs, animations, fonts, icons, spacing, typography, and scroll behavior.
 - [ ] Record any remaining WebView2 rendering differences with matching baseline and Tauri captures supplied or initiated by the user.
 
@@ -238,7 +239,8 @@ Linux Proton routes are intentionally outside this Windows-only rewrite: `linux.
 
 - [ ] Confirm preview and replacement NSIS install/uninstall, WebView2 bootstrapper, shortcuts, and elevation behavior.
 - [ ] Confirm replacement rollback backup paths and `migration.json` contents before relying on installer recovery.
-- [x] Built local `2.0.0-41d43873` Preview installer `release/tauri/preview/BSManager-Preview-2.0.0-41d43873-x64-setup.exe`; SHA-256 `6E133ACE04F7BE5760A5992260DDDDB0DFD9A8F2B22A641F1792AC4B1836D921`; Authenticode `NotSigned`.
-- [x] Built local `2.0.0-41d43873` Replacement installer `release/tauri/replacement/BSManager-2.0.0-41d43873-x64-setup.exe`; SHA-256 `4AF14ACAD23B4C5ACAB89FFBF9FA5431A7FD2C0DA08842981144DA27FF557B61`; Authenticode `NotSigned`.
-- [x] Listed both NSIS archives with 7-Zip. Each contains `bs-manager-tauri.exe` and the three Rust helper executables; neither contains Electron or Node runtime files. Redundant `bs-versions.json`, `patreons.json`, and proto schema resources are absent; the JSON data is embedded at compile time.
-- [ ] User installs Preview and confirms installer no longer fails writing `_up_\assets\jsons\bs-versions.json`, then opens app and reviews migration and version colors.
+- [x] Built local `2.0.0-f77b1389` Preview installer `release/tauri/preview/BSManager-Preview-2.0.0-f77b1389-x64-setup.exe` (10,755,473 bytes); SHA-256 `27C22E99D08EF73CBAE1738679A0A4E881AD4227A1F1C2D448B94FBC9751B2F8`; Authenticode `NotSigned`.
+- [x] Built local `2.0.0-f77b1389` Replacement installer `release/tauri/replacement/BSManager-2.0.0-f77b1389-x64-setup.exe` (10,755,031 bytes); SHA-256 `2D081F9F51946FDB6855AA8C46677BF4DCCC85105C58AEC06BFCD9C70FA64AA3`; Authenticode `NotSigned`.
+- [x] Listed both latest NSIS archives with 7-Zip. Each contains `bs-manager-tauri.exe` and the three Rust helper executables; neither contains Electron or Node runtime files. Redundant `bs-versions.json`, `patreons.json`, and proto schema resources are absent; the JSON data is embedded at compile time.
+- [x] The main title bar displays the build version; hash-tagged versions link to `https://github.com/SlopSaber/bs-manager/commit/<hash>`. Temporary version `2.0.0-f77b1389` was applied only while building; package and Rust manifests and `Cargo.lock` were restored to `2.0.0` afterward.
+- [ ] User installs `2.0.0-f77b1389` Preview and confirms installer no longer fails writing `_up_\assets\jsons\bs-versions.json`, then opens app and reviews settings migration and version colors.
