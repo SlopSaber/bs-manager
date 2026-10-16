@@ -650,14 +650,14 @@ async fn handle_request<R: Runtime>(
     response_channel: Option<&str>,
     cancelled: Arc<AtomicBool>,
 ) -> Result<Value, SerializedError> {
-    if matches!(channel, "download-bs-version" | "auto-download-bs-version" | "download-bs-version-qr") {
+    if matches!(channel, "download-bs-version" | "auto-download-bs-version" | "download-bs-version-qr" | "bs-steam-download") {
         // The Electron service stopped its current DepotDownloader before starting a replacement.
         steam::stop_download(app);
     }
     let version_scan = channel == "bs-version.installed-versions";
     let map_scan = channel == "load-version-maps";
     let mutates_library = matches!(channel,
-        "import-version" | "download-bs-version" | "auto-download-bs-version" | "download-bs-version-qr" |
+        "import-version" | "download-bs-version" | "auto-download-bs-version" | "download-bs-version-qr" | "bs-steam-download" |
         "bs-oculus-download" | "bs-version.edit" | "bs-version.clone" | "bs.uninstall" |
         "delete-maps" | "bs-maps.import-maps" | "bs-maps.download-map" | "one-click-install-map" |
         "install-playlist-file" | "import-playlists" | "delete-playlist" | "download-playlist" | "one-click-install-playlist" |
@@ -671,7 +671,7 @@ async fn handle_request<R: Runtime>(
     if app.config().identifier == "io.bsmanager.bsmanager.preview" && (mutates_library || version_scan || map_scan) {
         let legacy_running = windows_integration::legacy_manager_running().await?;
         parallel_steam_download = legacy_running
-            && matches!(channel, "download-bs-version" | "auto-download-bs-version" | "download-bs-version-qr")
+            && matches!(channel, "download-bs-version" | "auto-download-bs-version" | "download-bs-version-qr" | "bs-steam-download")
             && args.get("isVerification").and_then(Value::as_bool) != Some(true);
         if legacy_running && mutates_library && !parallel_steam_download {
             return Err(serialized_error(
@@ -727,15 +727,53 @@ async fn handle_request<R: Runtime>(
             let automatic = channel == "auto-download-bs-version";
             steam::download(app, window, response_channel, &args, cancelled, qr, automatic, parallel_steam_download).await
         }
+        "bs-steam-download" => {
+            if window.label() != "main" {
+                return Err(serialized_error("Steam downloads are only available in the main window", "WINDOW_NOT_ALLOWED"));
+            }
+            let app_state = app.state::<AppState>();
+            let _operation = app_state.library_operation.lock().await;
+            steam::download_v2(app, window, response_channel, &args, cancelled, parallel_steam_download).await
+        }
+        "bs-steam-download-respond" => {
+            if window.label() != "main" {
+                return Err(serialized_error("Steam session controls are only available in the main window", "WINDOW_NOT_ALLOWED"));
+            }
+            Ok(steam::respond(app, &args))
+        }
+        "bs-steam-stop-download" => {
+            if window.label() != "main" {
+                return Err(serialized_error("Steam session controls are only available in the main window", "WINDOW_NOT_ALLOWED"));
+            }
+            Ok(steam::stop_download(app))
+        }
+        "steam-session-exists" => {
+            if window.label() != "main" {
+                return Err(serialized_error("Steam session controls are only available in the main window", "WINDOW_NOT_ALLOWED"));
+            }
+            Ok(json!(steam::session_exists(app).await?))
+        }
+        "steam-session-username" => {
+            if window.label() != "main" {
+                return Err(serialized_error("Steam session controls are only available in the main window", "WINDOW_NOT_ALLOWED"));
+            }
+            Ok(steam::session_username(app).await?.map(Value::String).unwrap_or(Value::Null))
+        }
+        "import-legacy-steam-username" => {
+            if window.label() != "main" {
+                return Err(serialized_error("Steam session controls are only available in the main window", "WINDOW_NOT_ALLOWED"));
+            }
+            let username = args.as_str().ok_or_else(|| serialized_error("Steam username is required", "INVALID_SESSION"))?;
+            steam::import_legacy_username(app, username).await?;
+            Ok(Value::Null)
+        }
         "stop-download-bs-version" => Ok(steam::stop_download(app)),
         "send-input-bs-download" => Ok(steam::send_input(app, &args)),
         "delete-steam-session" => {
             if window.label() != "main" {
                 return Err(serialized_error("Steam session controls are only available in the main window", "WINDOW_NOT_ALLOWED"));
             }
-            let username = args.as_str().filter(|username| !username.trim().is_empty())
-                .ok_or_else(|| serialized_error("Steam username is required", "INVALID_SESSION"))?;
-            steam::delete_session(app, username).await?;
+            steam::delete_session(app).await?;
             Ok(Value::Null)
         }
         "login-with-meta" => {
@@ -1211,7 +1249,7 @@ async fn run_ipc_route<R: Runtime>(
             log::warn!("Windows Tauri one-way route '{channel}' failed: {}", error.message);
         }
     }
-    ipc_response(&window, &channel, response_id.as_deref(), result, matches!(channel.as_str(), "import-version" | "download-bs-version" | "auto-download-bs-version" | "download-bs-version-qr" | "bs-oculus-download" | "bs-launch.launch" | "download-model" | "get-version-models" | "export-models" | "delete-models" | "load-version-maps" | "delete-maps" | "export-maps" | "bs-maps.import-maps" | "get-version-playlists-details" | "import-playlists" | "delete-playlist" | "export-playlists" | "download-playlist" | "one-click-install-playlist" | "bs-mods.import-mods" | "bs-mods.install-mods" | "bs-mods.uninstall-mods" | "bs-mods.uninstall-all-mods" | "download-update" | "last-downloaded-map" | "bs-version.get-version-dict"));
+    ipc_response(&window, &channel, response_id.as_deref(), result, matches!(channel.as_str(), "import-version" | "download-bs-version" | "auto-download-bs-version" | "download-bs-version-qr" | "bs-steam-download" | "bs-oculus-download" | "bs-launch.launch" | "download-model" | "get-version-models" | "export-models" | "delete-models" | "load-version-maps" | "delete-maps" | "export-maps" | "bs-maps.import-maps" | "get-version-playlists-details" | "import-playlists" | "delete-playlist" | "export-playlists" | "download-playlist" | "one-click-install-playlist" | "bs-mods.import-mods" | "bs-mods.install-mods" | "bs-mods.uninstall-mods" | "bs-mods.uninstall-all-mods" | "download-update" | "last-downloaded-map" | "bs-version.get-version-dict"));
     if should_restart { app.request_restart(); }
 }
 

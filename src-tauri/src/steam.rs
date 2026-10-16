@@ -29,13 +29,37 @@ const PREVIEW_STAGING_FOLDER: &str = ".bsmanager-preview-steam-downloads";
 
 #[derive(Clone)]
 pub struct SteamControl {
+    id: String,
     commands: mpsc::UnboundedSender<SteamCommand>,
     cancelled: Arc<AtomicBool>,
 }
 
 enum SteamCommand {
     Input(String),
+    Password(SteamPasswordAnswer),
     Cancel,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(tag = "type")]
+enum SteamPasswordAnswer {
+    Password { username: String, password: String, stay: bool },
+    GuardCode { code: String },
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SteamDownloadResponse {
+    download_id: String,
+    answer: SteamPasswordAnswer,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SteamDownloadRequest {
+    bs_version: Value,
+    #[serde(default)]
+    is_verification: bool,
 }
 
 enum DownloadWake {
@@ -170,7 +194,7 @@ pub async fn download<R: Runtime>(
     let mut stdin = child.stdin.take().ok_or_else(|| serialized_error("Could not communicate with bs-downloader", "NotCompleted"))?;
     let stdout = child.stdout.take().ok_or_else(|| serialized_error("Could not read bs-downloader response", "NotCompleted"))?;
     let (commands, mut command_rx) = mpsc::unbounded_channel();
-    let control = SteamControl { commands: commands.clone(), cancelled: cancelled.clone() };
+    let control = SteamControl { id: Uuid::new_v4().to_string(), commands: commands.clone(), cancelled: cancelled.clone() };
     let start = json!({ "command": "start", "version": PROTOCOL_VERSION, "options": options });
     if let Err(error) = write_command(&mut stdin, &start).await {
         let _ = child.start_kill();
@@ -256,6 +280,7 @@ pub async fn download<R: Runtime>(
                             cancelled.store(true, Ordering::Relaxed);
                         }
                     }
+                    Some(SteamCommand::Password(_)) => {}
                     Some(SteamCommand::Cancel) => cancelled.store(true, Ordering::Relaxed),
                     None => {}
                 }
@@ -310,6 +335,354 @@ pub async fn download<R: Runtime>(
     Ok(Value::Null)
 }
 
+pub async fn download_v2<R: Runtime>(
+    app: &AppHandle<R>,
+    window: &WebviewWindow<R>,
+    response_channel: Option<&str>,
+    args: &Value,
+    cancelled: Arc<AtomicBool>,
+    isolated_parallel_download: bool,
+) -> Result<Value, SerializedError> {
+    let request: SteamDownloadRequest = serde_json::from_value(args.clone())
+        .map_err(|error| serialized_error(error.to_string(), "INVALID_DOWNLOAD_REQUEST"))?;
+    let manifest = request.bs_version.get("BSManifest")
+        .and_then(|value| value.as_str().map(str::to_owned).or_else(|| value.as_u64().map(|id| id.to_string())))
+        .filter(|manifest| !manifest.is_empty() && manifest.bytes().all(|byte| byte.is_ascii_digit()))
+        .ok_or_else(|| serialized_error("Beat Saber manifest ID is invalid", "InvalidManifest"))?;
+
+    let version_path = versions::version_path(app, &request.bs_version)?;
+    let resumable = has_matching_pending(&version_path, &manifest);
+    let staged_resume = if request.is_verification { None } else {
+        find_staged_download(&version_path, &manifest)
+            .map_err(|error| serialized_error(error.to_string(), "DirectoryCreate"))?
+    };
+    let (destination, mut final_destination, staged) = if request.is_verification {
+        (version_path.clone(), version_path.clone(), false)
+    } else if isolated_parallel_download {
+        let destination = match staged_resume {
+            Some(path) => path,
+            None => create_staged_download(&version_path)
+                .map_err(|error| serialized_error(error.to_string(), "DirectoryCreate"))?,
+        };
+        (destination, unique_destination(&version_path), true)
+    } else if resumable {
+        (version_path.clone(), version_path.clone(), false)
+    } else if let Some(destination) = staged_resume {
+        (destination, unique_destination(&version_path), true)
+    } else {
+        let destination = unique_destination(&version_path);
+        (destination.clone(), destination, false)
+    };
+    if isolated_parallel_download {
+        log::info!("Starting isolated Steam download while legacy BSManager is running");
+    }
+    fs::create_dir_all(destination.parent().ok_or_else(|| serialized_error("Installation path is invalid", "DirectoryCreate"))?)
+        .map_err(|error| serialized_error(error.to_string(), "DirectoryCreate"))?;
+    if staged {
+        fs::create_dir_all(&destination)
+            .map_err(|error| serialized_error(error.to_string(), "DirectoryCreate"))?;
+    }
+
+    let mut version = request.bs_version.clone();
+    let folder_name = final_destination.file_name().and_then(|name| name.to_str()).unwrap_or_default();
+    if version.get("BSVersion").and_then(Value::as_str) != Some(folder_name) {
+        version.as_object_mut()
+            .ok_or_else(|| serialized_error("Version data is invalid", "InvalidManifest"))?
+            .insert("name".to_owned(), json!(folder_name));
+    }
+    let version_object = version.as_object_mut()
+        .ok_or_else(|| serialized_error("Version data is invalid", "InvalidManifest"))?;
+    version_object.insert("path".to_owned(), json!(final_destination));
+    version_object.insert("steam".to_owned(), json!(false));
+    version_object.insert("oculus".to_owned(), json!(false));
+    version_object.insert("metadata".to_owned(), json!({ "store": "steam", "id": "" }));
+
+    let download_id = Uuid::new_v4().to_string();
+    let (commands, mut command_rx) = mpsc::unbounded_channel();
+    let control = SteamControl { id: download_id.clone(), commands: commands.clone(), cancelled: cancelled.clone() };
+    {
+        let state = app.state::<AppState>();
+        let mut active = state.steam_download.lock()
+            .map_err(|_| serialized_error("Steam downloader state is unavailable", "NotCompleted"))?;
+        *active = Some(control);
+    }
+
+    let result = async {
+        emit_steam_event(window, response_channel, json!({
+            "type": "Started",
+            "downloadId": download_id,
+            "version": version,
+            "isVerification": request.is_verification,
+        }))?;
+
+        let mut finished = false;
+        if let Some(username) = load_session_username(app).await? {
+            if let Some(session) = load_session(app, &username).await {
+                let options = sidecar_options(&manifest, &destination, &session.username, "", Some(&session.refresh_token), false);
+                match run_v2_attempt(app, window, response_channel, &mut command_rx, &cancelled, &options, true, false).await {
+                    Ok(AttemptResult::Finished) => finished = true,
+                    Ok(AttemptResult::Password(_)) => {}
+                    Err(error) if error.code == "TokenRejected" || error.code == "InvalidCredentials" => {
+                        log::info!("Saved Steam session was rejected; asking the user to log in");
+                        delete_session(app).await?;
+                    }
+                    Err(error) => return Err(error),
+                }
+            } else {
+                delete_session(app).await?;
+            }
+        }
+
+        if !finished {
+            emit_steam_event(window, response_channel, json!({ "type": "NeedsLogin" }))?;
+            let options = sidecar_options(&manifest, &destination, "", "", None, true);
+            match run_v2_attempt(app, window, response_channel, &mut command_rx, &cancelled, &options, false, true).await? {
+                AttemptResult::Finished => finished = true,
+                AttemptResult::Password(SteamPasswordAnswer::Password { username, password, stay }) => {
+                    let options = sidecar_options(&manifest, &destination, &username, &password, None, false);
+                    match run_v2_attempt(app, window, response_channel, &mut command_rx, &cancelled, &options, stay, false).await? {
+                        AttemptResult::Finished => finished = true,
+                        AttemptResult::Password(_) => {}
+                    }
+                }
+                AttemptResult::Password(SteamPasswordAnswer::GuardCode { .. }) => {
+                    return Err(serialized_error("Steam login response was invalid", "NotCompleted"));
+                }
+            }
+        }
+
+        if !finished {
+            return Err(serialized_error("bs-downloader exited without a completed download", "NotCompleted"));
+        }
+        if cancelled.load(Ordering::Relaxed) {
+            return Err(serialized_error("Request was cancelled", "REQUEST_CANCELLED"));
+        }
+
+        if staged {
+            final_destination = finalize_staged_download(&destination, &version_path)
+                .map_err(|error| serialized_error(error.to_string(), "VERSION_MOVE_FAILED"))?;
+        }
+        let metadata = json!({ "id": Uuid::new_v4().to_string(), "store": "steam" });
+        let metadata_path = final_destination.join("metadata.config");
+        fs::write(&metadata_path, serde_json::to_vec_pretty(&metadata).unwrap_or_default())
+            .map_err(|error| serialized_error(error.to_string(), "VERSION_METADATA_WRITE_FAILED"))?;
+        if let Some(version_object) = version.as_object_mut() {
+            version_object.insert("path".to_owned(), json!(final_destination));
+        }
+        emit_steam_event(window, response_channel, json!({ "type": "Done", "version": version }))?;
+        Ok(Value::Null)
+    }.await;
+
+    if let Ok(mut active) = app.state::<AppState>().steam_download.lock() {
+        if active.as_ref().is_some_and(|active| active.id == download_id) {
+            *active = None;
+        }
+    }
+    result
+}
+
+enum AttemptResult {
+    Finished,
+    Password(SteamPasswordAnswer),
+}
+
+fn sidecar_options(manifest: &str, directory: &Path, username: &str, password: &str, refresh_token: Option<&str>, qr: bool) -> Value {
+    json!({
+        "app": APP_ID,
+        "depot": DEPOT_ID,
+        "manifest": manifest,
+        "directory": directory,
+        "username": username,
+        "password": password,
+        "refreshToken": refresh_token,
+        "qr": qr,
+    })
+}
+
+fn emit_steam_event<R: Runtime>(window: &WebviewWindow<R>, response_channel: Option<&str>, event: Value) -> Result<(), SerializedError> {
+    if let Some(channel) = response_channel {
+        crate::emit_response_value(window, Some(channel), event)?;
+    }
+    Ok(())
+}
+
+async fn run_v2_attempt<R: Runtime>(
+    app: &AppHandle<R>,
+    window: &WebviewWindow<R>,
+    response_channel: Option<&str>,
+    commands: &mut mpsc::UnboundedReceiver<SteamCommand>,
+    cancelled: &Arc<AtomicBool>,
+    options: &Value,
+    persist_session: bool,
+    allow_password: bool,
+) -> Result<AttemptResult, SerializedError> {
+    let executable = downloader_path(app)?;
+    let mut child = Command::new(executable);
+    child.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true);
+    #[cfg(windows)]
+    child.creation_flags(0x0800_0000);
+    let mut child = child.spawn()
+        .map_err(|error| serialized_error(format!("Could not run bs-downloader: {error}"), "ExeNotFoundWindows"))?;
+    let mut stdin = child.stdin.take().ok_or_else(|| serialized_error("Could not communicate with bs-downloader", "NotCompleted"))?;
+    let stdout = child.stdout.take().ok_or_else(|| serialized_error("Could not read bs-downloader response", "NotCompleted"))?;
+    write_command(&mut stdin, &json!({ "command": "start", "version": PROTOCOL_VERSION, "options": options })).await
+        .map_err(|error| serialized_error(error.to_string(), "NotCompleted"))?;
+
+    let mut lines = BufReader::new(stdout).lines();
+    let mut finished_event = false;
+    let mut failure: Option<SerializedError> = None;
+    let mut password_answer: Option<SteamPasswordAnswer> = None;
+    let mut cancel_deadline = None;
+    let mut cancel_sent = false;
+    let mut force_killed = false;
+    let mut input_open = true;
+
+    loop {
+        tokio::select! {
+            line = lines.next_line() => {
+                match line {
+                    Ok(Some(line)) => {
+                        if line.len() > MAX_LINE_LENGTH {
+                            failure = Some(serialized_error("bs-downloader response too large", "NotCompleted"));
+                            cancelled.store(true, Ordering::Relaxed);
+                        } else if !line.trim().is_empty() {
+                            match handle_v2_event(&line, app, window, response_channel, persist_session, &mut finished_event).await {
+                                Ok(()) => {}
+                                Err(error) => {
+                                    if error.code != "REQUEST_CANCELLED" && !cancelled.load(Ordering::Relaxed) {
+                                        failure = Some(error);
+                                    }
+                                    cancelled.store(true, Ordering::Relaxed);
+                                }
+                            }
+                        }
+                    }
+                    Ok(None) => break,
+                    Err(error) => {
+                        failure = Some(serialized_error(error.to_string(), "NotCompleted"));
+                        cancelled.store(true, Ordering::Relaxed);
+                        let _ = child.start_kill();
+                        break;
+                    }
+                }
+            }
+            command = commands.recv(), if input_open => {
+                if command.is_none() { input_open = false; }
+                match command {
+                    Some(SteamCommand::Input(value)) => {
+                        if let Err(error) = write_command(&mut stdin, &json!({ "command": "input", "value": value })).await {
+                            failure = Some(serialized_error(error.to_string(), "NotCompleted"));
+                            cancelled.store(true, Ordering::Relaxed);
+                        }
+                    }
+                    Some(SteamCommand::Password(answer @ SteamPasswordAnswer::Password { .. })) if allow_password => {
+                        password_answer = Some(answer);
+                        let _ = write_command(&mut stdin, &json!({ "command": "cancel" })).await;
+                        cancel_sent = true;
+                        cancel_deadline = Some(Instant::now() + Duration::from_secs(5));
+                    }
+                    Some(SteamCommand::Password(SteamPasswordAnswer::GuardCode { code })) => {
+                        if let Err(error) = write_command(&mut stdin, &json!({ "command": "input", "value": code })).await {
+                            failure = Some(serialized_error(error.to_string(), "NotCompleted"));
+                            cancelled.store(true, Ordering::Relaxed);
+                        }
+                    }
+                    Some(SteamCommand::Password(_)) => {}
+                    Some(SteamCommand::Cancel) => cancelled.store(true, Ordering::Relaxed),
+                    None => {}
+                }
+            }
+            _ = sleep(Duration::from_millis(100)) => {}
+        }
+        if cancelled.load(Ordering::Relaxed) {
+            if !cancel_sent {
+                let _ = write_command(&mut stdin, &json!({ "command": "cancel" })).await;
+                cancel_sent = true;
+                cancel_deadline = Some(Instant::now() + Duration::from_secs(5));
+            } else if !force_killed && cancel_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                let _ = child.start_kill();
+                force_killed = true;
+            }
+        } else if password_answer.is_some() && !force_killed && cancel_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            let _ = child.start_kill();
+            force_killed = true;
+        }
+    }
+
+    let status = child.wait().await
+        .map_err(|error| serialized_error(error.to_string(), "NotCompleted"))?;
+    if let Some(error) = failure { return Err(error); }
+    if cancelled.load(Ordering::Relaxed) {
+        return Err(serialized_error("Request was cancelled", "REQUEST_CANCELLED"));
+    }
+    if let Some(answer) = password_answer {
+        return Ok(AttemptResult::Password(answer));
+    }
+    if !status.success() {
+        return Err(serialized_error("bs-downloader exited without a completed download", "NotCompleted"));
+    }
+    if !finished_event {
+        return Err(serialized_error("bs-downloader exited without a completed download", "NotCompleted"));
+    }
+    Ok(AttemptResult::Finished)
+}
+
+async fn handle_v2_event<R: Runtime>(
+    line: &str,
+    app: &AppHandle<R>,
+    window: &WebviewWindow<R>,
+    response_channel: Option<&str>,
+    persist_session: bool,
+    finished_event: &mut bool,
+) -> Result<(), SerializedError> {
+    let event = serde_json::from_str::<SidecarEvent>(line)
+        .map_err(|error| serialized_error(format!("Invalid bs-downloader response: {error}"), "NotCompleted"))?;
+    if event.version != PROTOCOL_VERSION {
+        return Err(serialized_error("Unsupported bs-downloader protocol", "NotCompleted"));
+    }
+    match event.kind.as_str() {
+        "Session" if event.sub_type == "Authenticated" => {
+            if persist_session {
+                if let Ok(session) = serde_json::from_value::<SteamSession>(event.data) {
+                    if let Err(error) = save_session(app, &session).await {
+                        log::warn!("Could not save Steam session: {}", error.message);
+                    }
+                } else {
+                    log::warn!("bs-downloader returned an invalid Steam session");
+                }
+            }
+            Ok(())
+        }
+        "Diagnostic" => Ok(()),
+        "Error" => Err(serialized_error("bs-downloader failed", &event.sub_type)),
+        "Info" | "Warning" => {
+            if !valid_event_type(&event.kind, &event.sub_type) || !event.data.is_string() {
+                return Err(serialized_error("Invalid bs-downloader event", "NotCompleted"));
+            }
+            let data = event.data.as_str().unwrap_or_default();
+            let translated = match (event.kind.as_str(), event.sub_type.as_str()) {
+                ("Warning", code) => Some(json!({ "type": "Warning", "code": code })),
+                ("Info", "QRCode") => Some(json!({ "type": "QrCode", "url": data })),
+                ("Info", "SteamID") => Some(json!({ "type": "LoggedIn", "steamId": data })),
+                ("Info", "Guard" | "2FA") => Some(json!({ "type": "NeedsGuardCode" })),
+                ("Info", "MobileApp") => Some(json!({ "type": "NeedsMobileApproval" })),
+                ("Info", "Progress" | "Validated") => {
+                    let progress = data.replace(',', ".").parse::<f64>().ok()
+                        .filter(|progress| progress.is_finite()).unwrap_or(0.0).clamp(0.0, 100.0);
+                    Some(json!({ "type": "Progress", "progress": progress }))
+                }
+                ("Info", "Finished") => { *finished_event = true; None }
+                _ => None,
+            };
+            if let Some(translated) = translated {
+                emit_steam_event(window, response_channel, translated)?;
+            }
+            Ok(())
+        }
+        _ => Err(serialized_error("Invalid bs-downloader event", "NotCompleted")),
+    }
+}
+
 pub fn stop_download<R: Runtime>(app: &AppHandle<R>) -> Value {
     if let Ok(active) = app.state::<AppState>().steam_download.lock() {
         if let Some(active) = active.as_ref() {
@@ -328,9 +701,44 @@ pub fn send_input<R: Runtime>(app: &AppHandle<R>, args: &Value) -> Value {
     json!(sent)
 }
 
-pub async fn delete_session<R: Runtime>(app: &AppHandle<R>, username: &str) -> Result<(), SerializedError> {
-    let path = session_path(app, username).await?;
-    match tokio::fs::remove_file(path).await {
+pub fn respond<R: Runtime>(app: &AppHandle<R>, args: &Value) -> Value {
+    let Ok(response) = serde_json::from_value::<SteamDownloadResponse>(args.clone()) else { return json!(false) };
+    let state = app.state::<AppState>();
+    let Ok(active) = state.steam_download.lock() else { return json!(false) };
+    let Some(active) = active.as_ref().filter(|active| active.id == response.download_id) else { return json!(false) };
+    let command = match response.answer {
+        answer @ SteamPasswordAnswer::Password { .. } => SteamCommand::Password(answer),
+        answer @ SteamPasswordAnswer::GuardCode { .. } => SteamCommand::Password(answer),
+    };
+    json!(active.commands.send(command).is_ok())
+}
+
+pub async fn session_username<R: Runtime>(app: &AppHandle<R>) -> Result<Option<String>, SerializedError> {
+    load_session_username(app).await
+}
+
+pub async fn session_exists<R: Runtime>(app: &AppHandle<R>) -> Result<bool, SerializedError> {
+    Ok(load_session_username(app).await?.is_some())
+}
+
+pub async fn import_legacy_username<R: Runtime>(app: &AppHandle<R>, username: &str) -> Result<(), SerializedError> {
+    let username = username.trim();
+    if username.is_empty() {
+        return Err(serialized_error("Steam username is required", "INVALID_SESSION"));
+    }
+    if load_session_username(app).await?.is_none() {
+        save_session_username(app, username)?;
+    }
+    Ok(())
+}
+
+pub async fn delete_session<R: Runtime>(app: &AppHandle<R>) -> Result<(), SerializedError> {
+    let username = load_session_username(app).await?;
+    if let Some(username) = username {
+        remove_session_file(app, &username).await?;
+    }
+    let marker = session_username_path(app)?;
+    match tokio::fs::remove_file(marker).await {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(serialized_error(error.to_string(), "SESSION_STORAGE_FAILED")),
@@ -518,6 +926,43 @@ async fn session_path<R: Runtime>(app: &AppHandle<R>, username: &str) -> Result<
     Ok(config.join("steam-sessions").join(format!("{key}.bin")))
 }
 
+fn session_username_path<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, SerializedError> {
+    let config = app.path().app_config_dir().map_err(|error| serialized_error(error.to_string(), "SESSION_STORAGE_FAILED"))?;
+    Ok(config.join("steam-sessions").join("username.json"))
+}
+
+async fn load_session_username<R: Runtime>(app: &AppHandle<R>) -> Result<Option<String>, SerializedError> {
+    let path = session_username_path(app)?;
+    let bytes = match tokio::fs::read(path).await {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(serialized_error(error.to_string(), "SESSION_STORAGE_FAILED")),
+    };
+    let username = serde_json::from_slice::<Value>(&bytes).ok()
+        .and_then(|value| value.get("username").and_then(Value::as_str).map(str::to_owned))
+        .map(|username| username.trim().to_owned())
+        .filter(|username| !username.is_empty());
+    Ok(username)
+}
+
+fn save_session_username<R: Runtime>(app: &AppHandle<R>, username: &str) -> Result<(), SerializedError> {
+    let path = session_username_path(app)?;
+    let parent = path.parent().ok_or_else(|| serialized_error("Steam session storage path is invalid", "SESSION_STORAGE_FAILED"))?;
+    fs::create_dir_all(parent).map_err(|error| serialized_error(error.to_string(), "SESSION_STORAGE_FAILED"))?;
+    let bytes = serde_json::to_vec(&json!({ "username": username.trim() }))
+        .map_err(|error| serialized_error(error.to_string(), "SESSION_STORAGE_FAILED"))?;
+    fs::write(path, bytes).map_err(|error| serialized_error(error.to_string(), "SESSION_STORAGE_FAILED"))
+}
+
+async fn remove_session_file<R: Runtime>(app: &AppHandle<R>, username: &str) -> Result<(), SerializedError> {
+    let path = session_path(app, username).await?;
+    match tokio::fs::remove_file(path).await {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(serialized_error(error.to_string(), "SESSION_STORAGE_FAILED")),
+    }
+}
+
 async fn load_session<R: Runtime>(app: &AppHandle<R>, username: &str) -> Option<SteamSession> {
     let path = session_path(app, username).await.ok()?;
     let encrypted = fs::read(path).ok()?;
@@ -536,7 +981,8 @@ async fn save_session<R: Runtime>(app: &AppHandle<R>, session: &SteamSession) ->
     fs::create_dir_all(parent).map_err(|error| serialized_error(error.to_string(), "SESSION_STORAGE_FAILED"))?;
     let bytes = serde_json::to_vec(session).map_err(|error| serialized_error(error.to_string(), "SESSION_STORAGE_FAILED"))?;
     let encrypted = dpapi::protect(&bytes).map_err(|error| serialized_error(error.to_string(), "SESSION_STORAGE_FAILED"))?;
-    fs::write(path, encrypted).map_err(|error| serialized_error(error.to_string(), "SESSION_STORAGE_FAILED"))
+    fs::write(path, encrypted).map_err(|error| serialized_error(error.to_string(), "SESSION_STORAGE_FAILED"))?;
+    save_session_username(app, &session.username)
 }
 
 #[cfg(windows)]
