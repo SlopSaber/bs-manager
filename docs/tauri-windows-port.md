@@ -52,6 +52,7 @@ The complete route-by-route, event, window, settings, failure, installer, and vi
 
 - [x] Renderer contract type-check and production build include all six entry pages: main, update launcher, shortcut launcher, and map, playlist, and model one-click windows.
 - [x] Source inventory maps every non-Linux route in `src/shared/models/ipc/ipc-routes.ts` to the Rust dispatcher or a delegated Rust handler. Linux Proton routes remain outside this Windows rewrite.
+- [x] Baseline IPC audit at `00380c798ea3a8447270e8bbd367e921d03d154b` found 106 `IpcService` listeners and three direct `ipcMain` listeners. Every Windows handler has a Rust dispatch arm; no baseline Windows channel was missing. This verifies source coverage only; runtime behavior remains open.
 - [x] Tauri's native-command capability allowlist includes the six packaged local windows and excludes the remote Meta authentication and cookie-cleaner webviews.
 - [x] Preview and replacement x64 NSIS profiles compile and emit local installer artifacts.
 - [ ] Exercise every route's result, progress, error, cancellation, and event behavior in the Windows app; track each in the linked matrix.
