@@ -22,6 +22,8 @@ mod oculus;
 mod shortcuts;
 mod stores;
 mod steam;
+#[cfg(windows)]
+mod webview_memory;
 mod versions;
 mod windows_integration;
 mod beat_saver;
@@ -549,6 +551,8 @@ fn create_window<R: Runtime>(app: &AppHandle<R>, template: &str, args: Option<Va
                 cancel_window_requests(&lifecycle_app, &lifecycle_label);
             }
         });
+        #[cfg(windows)]
+        webview_memory::register(&window);
     }
     Ok(())
 }

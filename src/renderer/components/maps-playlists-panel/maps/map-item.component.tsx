@@ -205,7 +205,7 @@ export function MapItemComponent <T = unknown>({ hash, title, autor, songAutor, 
     }
 
     return (
-        <motion.li className="relative h-[100px] min-w-[370px] shrink-0 grow basis-0 text-white group cursor-pointer" onHoverStart={() => setHovered(true)} onHoverEnd={() => setHovered(false)} style={{ zIndex: hovered && 5, transform: "translateZ(0) scale(1.0, 1.0)", backfaceVisibility: "hidden" }}>
+        <motion.li className="relative h-[100px] min-w-[370px] shrink-0 grow basis-0 text-white group cursor-pointer" onHoverStart={() => setHovered(true)} onHoverEnd={() => setHovered(false)} style={{ zIndex: hovered ? 5 : 0, isolation: "isolate" }}>
             <GlowEffect visible={hovered || (isSelected && !!onSelected)} />
                 <AnimatePresence>
                     {(diffsPanelHovered || bottomBarHovered) && (

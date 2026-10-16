@@ -32,13 +32,14 @@ struct CacheIndex {
 
 struct CachedSong {
     hash: Arc<str>,
-    raw: RawSong,
+    encoded: Vec<u8>,
 }
 
 #[derive(Clone, PartialEq, Message)]
 struct RawCache {
-    #[prost(message, repeated, tag = "1")]
-    songs: Vec<RawSong>,
+    // Embedded messages and bytes use the same length-delimited protobuf wire format.
+    #[prost(bytes = "vec", repeated, tag = "1")]
+    songs: Vec<Vec<u8>>,
     #[prost(uint32, tag = "2")]
     last_updated: u32,
     #[prost(uint32, tag = "3")]
@@ -364,24 +365,25 @@ fn decode_cache(bytes: &[u8]) -> Result<CacheIndex, String> {
         by_hash: HashMap::with_capacity(cache.songs.len()),
         by_id: HashMap::with_capacity(cache.songs.len()),
     };
-    for mut song in cache.songs {
-        let hash: Arc<str> = std::mem::take(&mut song.hash_indices).into_iter()
-            .filter_map(|value| char::from_digit(value, 16))
+    for encoded in cache.songs {
+        let song = RawSong::decode(encoded.as_slice()).map_err(|error| error.to_string())?;
+        let hash: Arc<str> = song.hash_indices.iter()
+            .filter_map(|value| char::from_digit(*value, 16))
             .collect::<String>().into();
         let id = format!("{:x}", song.id_int);
         let song_index = index.songs.len();
         index.by_hash.insert(hash.clone(), song_index);
         index.by_id.insert(id, song_index);
-        index.songs.push(CachedSong { hash, raw: song });
+        index.songs.push(CachedSong { hash, encoded });
     }
     Ok(index)
 }
 
 impl CacheIndex {
-    // Keep the catalog in protobuf records; allocate JSON only for requested songs.
+    // Keep encoded records; decode and allocate JSON only for requested songs.
     fn details(&self, index: usize) -> Option<Value> {
         let cached = self.songs.get(index)?;
-        let song = &cached.raw;
+        let song = RawSong::decode(cached.encoded.as_slice()).ok()?;
         let uploader = song.uploader_ref.as_ref().cloned()
             .unwrap_or(RawUploaderRef { uploader_ref_index: 0, verified: false });
         let uploader_index = uploader.uploader_ref_index as usize;

@@ -396,6 +396,8 @@ dependencies = [
  "url",
  "urlencoding",
  "uuid",
+ "webview2-com",
+ "windows-core",
  "windows-sys 0.61.2",
  "winreg",
  "zip 9.0.3",
