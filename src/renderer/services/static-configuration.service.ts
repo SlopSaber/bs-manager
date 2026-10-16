@@ -20,7 +20,9 @@ export class StaticConfigurationService {
     }
 
     public get<K extends StaticConfigKeys>(key: K): Promise<StaticConfigKeyValues[K]> {
-        return lastValueFrom(this.ipc.sendV2("static-configuration.get", key)) as Promise<StaticConfigKeyValues[K]>;
+        // ElectronStore returns undefined for missing keys; Rust JSON replies encode them as null.
+        return lastValueFrom(this.ipc.sendV2("static-configuration.get", key))
+            .then(value => (value === null ? undefined : value)) as Promise<StaticConfigKeyValues[K]>;
     }
 
     public set<K extends StaticConfigKeys>(key: K, value: StaticConfigKeyValues[K]): Promise<void> {
