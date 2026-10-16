@@ -233,5 +233,7 @@ Linux Proton routes are intentionally outside this Windows-only rewrite: `linux.
 
 - [ ] Confirm preview and replacement NSIS install/uninstall, WebView2 bootstrapper, shortcuts, and elevation behavior.
 - [ ] Confirm replacement rollback backup paths and `migration.json` contents before relying on installer recovery.
-- [x] Built local `2.0.0-7bedafcf` artifacts and recorded SHA-256: Preview `04DCAEFDE1081975C5B9A9FF2FB29CF7423E82597FEAFAC2EA25C11FA756D497` and Replacement `58C13B95EEA36E56B8C4506A82611697D1202603C7D7957B53C36391292D72F2`; both are unsigned.
-- [x] Confirmed both `2.0.0-7bedafcf` NSIS installers contain the Tauri host and Rust helpers; no Electron or Node runtime was found.
+- [x] Built local `2.0.0-41d43873` Preview installer `release/tauri/preview/BSManager-Preview-2.0.0-41d43873-x64-setup.exe`; SHA-256 `6E133ACE04F7BE5760A5992260DDDDB0DFD9A8F2B22A641F1792AC4B1836D921`; Authenticode `NotSigned`.
+- [x] Built local `2.0.0-41d43873` Replacement installer `release/tauri/replacement/BSManager-2.0.0-41d43873-x64-setup.exe`; SHA-256 `4AF14ACAD23B4C5ACAB89FFBF9FA5431A7FD2C0DA08842981144DA27FF557B61`; Authenticode `NotSigned`.
+- [x] Listed both NSIS archives with 7-Zip. Each contains `bs-manager-tauri.exe` and the three Rust helper executables; neither contains Electron or Node runtime files. Redundant `bs-versions.json`, `patreons.json`, and proto schema resources are absent; the JSON data is embedded at compile time.
+- [ ] User installs Preview and confirms installer no longer fails writing `_up_\assets\jsons\bs-versions.json`, then opens app and reviews migration and version colors.
