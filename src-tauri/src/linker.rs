@@ -1,4 +1,4 @@
-use std::{fs, io, path::{Component, Path, PathBuf}};
+use std::{fs, io::{self, Read}, path::{Component, Path, PathBuf}};
 
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -149,7 +149,15 @@ fn link_folder<R: Runtime>(app: &AppHandle<R>, folder: &Path, intermediate: Opti
         let backup_path = backup_path(folder);
         copy_directory(folder, &backup_path).map_err(|error| link_error(error, "LINK_BACKUP_FAILED"))?;
     }
-    if keep_contents && path_exists(folder) {
+    let contents_already_shared = keep_contents && path_exists(folder)
+        && match directory_contents_already_shared(folder, &shared) {
+            Ok(already_shared) => already_shared,
+            Err(error) => {
+                log::debug!("Unable to compare shared folder contents; using merge copy: {error}");
+                false
+            }
+        };
+    if keep_contents && path_exists(folder) && !contents_already_shared {
         copy_directory(folder, &shared).map_err(|error| link_error(error, "LINK_COPY_FAILED"))?;
     }
 
@@ -238,6 +246,76 @@ fn copy_directory(source: &Path, destination: &Path) -> io::Result<()> {
         crate::library::LibraryError::CopyToSubpath => io::Error::new(io::ErrorKind::InvalidInput, "Cannot copy a folder into itself"),
         crate::library::LibraryError::Io(error) => error,
     })
+}
+
+fn directory_contents_already_shared(source: &Path, destination: &Path) -> io::Result<bool> {
+    if is_link(source) || !fs::symlink_metadata(source)?.is_dir() {
+        return Ok(false);
+    }
+
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
+        let target = destination.join(entry.file_name());
+        if !path_exists(&target) || !paths_have_same_contents(&entry.path(), &target)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn paths_have_same_contents(left: &Path, right: &Path) -> io::Result<bool> {
+    let left_metadata = fs::symlink_metadata(left)?;
+    let right_metadata = fs::symlink_metadata(right)?;
+    if is_link(left) || is_link(right) {
+        return Ok(false);
+    }
+
+    if left_metadata.is_dir() || right_metadata.is_dir() {
+        if !left_metadata.is_dir() || !right_metadata.is_dir() {
+            return Ok(false);
+        }
+
+        let left_entries = fs::read_dir(left)?.collect::<Result<Vec<_>, _>>()?;
+        let right_entries = fs::read_dir(right)?.collect::<Result<Vec<_>, _>>()?;
+        if left_entries.len() != right_entries.len() {
+            return Ok(false);
+        }
+
+        for left_entry in left_entries {
+            let left_name = left_entry.file_name();
+            let Some(right_entry) = right_entries.iter().find(|entry| {
+                entry.file_name().to_string_lossy().eq_ignore_ascii_case(&left_name.to_string_lossy())
+            }) else {
+                return Ok(false);
+            };
+            if !paths_have_same_contents(&left_entry.path(), &right_entry.path())? {
+                return Ok(false);
+            }
+        }
+        return Ok(true);
+    }
+
+    if !left_metadata.is_file() || !right_metadata.is_file()
+        || left_metadata.len() != right_metadata.len()
+        || left_metadata.permissions().readonly() != right_metadata.permissions().readonly()
+    {
+        return Ok(false);
+    }
+
+    let mut left_file = fs::File::open(left)?;
+    let mut right_file = fs::File::open(right)?;
+    let mut left_buffer = [0_u8; 64 * 1024];
+    let mut right_buffer = [0_u8; 64 * 1024];
+    loop {
+        let left_read = left_file.read(&mut left_buffer)?;
+        let right_read = right_file.read(&mut right_buffer)?;
+        if left_read != right_read || left_buffer[..left_read] != right_buffer[..right_read] {
+            return Ok(false);
+        }
+        if left_read == 0 {
+            return Ok(true);
+        }
+    }
 }
 
 fn directory_entries(path: &Path, ignore_broken: bool) -> Result<Vec<PathBuf>, SerializedError> {
