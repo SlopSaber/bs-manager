@@ -10,7 +10,7 @@ use std::{
 use futures_util::StreamExt;
 use serde_json::{Value, json};
 use tauri::{AppHandle, Runtime, WebviewWindow};
-use tokio::{io::AsyncReadExt, process::Command, time::timeout};
+use tokio::{io::{AsyncReadExt, AsyncWriteExt}, process::Command, time::timeout};
 use zip::ZipArchive;
 
 use crate::{SerializedError, serialized_error, versions};
@@ -162,8 +162,7 @@ async fn import_mods<R: Runtime>(
                     let target = destination.join(&relative);
                     tokio::fs::create_dir_all(target.parent().unwrap_or(&destination)).await
                         .map_err(|error| serialized_error(error.to_string(), "MOD_IMPORT_FAILED"))?;
-                    tokio::fs::copy(&source, &target).await
-                        .map_err(|error| serialized_error(error.to_string(), "MOD_IMPORT_FAILED"))?;
+                    copy_raw_dll(&source, &target, &cancelled).await?;
                     files.push(relative.to_string_lossy().replace('\\', "/"));
                 }
                 "zip" => {
@@ -192,6 +191,54 @@ async fn import_mods<R: Runtime>(
     }
     log::info!("Imported {imported} mods from {} paths, adding {file_count} files", total);
     Ok(Value::Null)
+}
+
+async fn copy_raw_dll(source: &Path, target: &Path, cancelled: &AtomicBool) -> Result<(), SerializedError> {
+    let staging = target.with_file_name(format!(".bsmanager-import-{}", uuid::Uuid::new_v4()));
+    let backup = target.with_file_name(format!(".bsmanager-import-backup-{}", uuid::Uuid::new_v4()));
+    let result = async {
+        let mut input = tokio::fs::File::open(source).await
+            .map_err(|error| serialized_error(error.to_string(), "MOD_IMPORT_FAILED"))?;
+        let mut output = tokio::fs::OpenOptions::new().write(true).create_new(true).open(&staging).await
+            .map_err(|error| serialized_error(error.to_string(), "MOD_IMPORT_FAILED"))?;
+        let mut buffer = [0_u8; 64 * 1024];
+        loop {
+            if cancelled.load(Ordering::Relaxed) {
+                return Err(serialized_error("Mod import was cancelled", "REQUEST_CANCELLED"));
+            }
+            let read = input.read(&mut buffer).await
+                .map_err(|error| serialized_error(error.to_string(), "MOD_IMPORT_FAILED"))?;
+            if read == 0 { break; }
+            output.write_all(&buffer[..read]).await
+                .map_err(|error| serialized_error(error.to_string(), "MOD_IMPORT_FAILED"))?;
+        }
+        output.flush().await
+            .map_err(|error| serialized_error(error.to_string(), "MOD_IMPORT_FAILED"))?;
+        drop(output);
+        if cancelled.load(Ordering::Relaxed) {
+            return Err(serialized_error("Mod import was cancelled", "REQUEST_CANCELLED"));
+        }
+        let had_target = match tokio::fs::symlink_metadata(target).await {
+            Ok(metadata) if metadata.file_type().is_symlink() || metadata.is_dir() => {
+                return Err(serialized_error("Mod destination cannot be a symbolic link or folder", "INVALID_PATH"));
+            }
+            Ok(_) => true,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+            Err(error) => return Err(serialized_error(error.to_string(), "MOD_IMPORT_FAILED")),
+        };
+        if had_target {
+            tokio::fs::rename(target, &backup).await
+                .map_err(|error| serialized_error(error.to_string(), "MOD_IMPORT_FAILED"))?;
+        }
+        if let Err(error) = tokio::fs::rename(&staging, target).await {
+            if had_target { let _ = tokio::fs::rename(&backup, target).await; }
+            return Err(serialized_error(error.to_string(), "MOD_IMPORT_FAILED"));
+        }
+        if had_target { let _ = tokio::fs::remove_file(backup).await; }
+        Ok(())
+    }.await;
+    if result.is_err() { let _ = tokio::fs::remove_file(staging).await; }
+    result
 }
 
 fn extract_external_zip(source: &Path, destination: &Path, cancelled: &AtomicBool) -> Result<Vec<String>, SerializedError> {
@@ -331,13 +378,23 @@ async fn download_verified_mod(version: &Value, cancelled: &AtomicBool) -> Resul
             let output = staging.join(&relative);
             fs::create_dir_all(output.parent().unwrap_or(&staging)).map_err(|error| serialized_error(error.to_string(), "MOD_ARCHIVE_FAILED"))?;
             let mut file = File::create(&output).map_err(|error| serialized_error(error.to_string(), "MOD_ARCHIVE_FAILED"))?;
-            let mut buffer = Vec::new();
-            entry.read_to_end(&mut buffer).map_err(|error| serialized_error(error.to_string(), "MOD_ARCHIVE_FAILED"))?;
-            let hash = format!("{:x}", md5::compute(&buffer));
+            let mut hasher = md5::Context::new();
+            let mut buffer = [0_u8; 64 * 1024];
+            loop {
+                if cancelled.load(Ordering::Relaxed) {
+                    return Err(serialized_error("Mod installation was cancelled", "REQUEST_CANCELLED"));
+                }
+                let read = entry.read(&mut buffer)
+                    .map_err(|error| serialized_error(error.to_string(), "MOD_ARCHIVE_FAILED"))?;
+                if read == 0 { break; }
+                hasher.consume(&buffer[..read]);
+                io::Write::write_all(&mut file, &buffer[..read])
+                    .map_err(|error| serialized_error(error.to_string(), "MOD_ARCHIVE_FAILED"))?;
+            }
+            let hash = format!("{:x}", hasher.compute());
             if expected.iter().any(|item| item.get("hash").and_then(Value::as_str).is_some_and(|expected| expected.eq_ignore_ascii_case(&hash))) {
                 matches += 1;
             }
-            io::Write::write_all(&mut file, &buffer).map_err(|error| serialized_error(error.to_string(), "MOD_ARCHIVE_FAILED"))?;
             paths.push(relative);
         }
         if matches != expected.len() {
