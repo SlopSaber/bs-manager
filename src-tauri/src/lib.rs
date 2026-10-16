@@ -654,6 +654,7 @@ async fn handle_request<R: Runtime>(
         // The Electron service stopped its current DepotDownloader before starting a replacement.
         steam::stop_download(app);
     }
+    let version_scan = channel == "bs-version.installed-versions";
     let mutates_library = matches!(channel,
         "import-version" | "download-bs-version" | "auto-download-bs-version" | "download-bs-version-qr" |
         "bs-oculus-download" | "bs-version.edit" | "bs-version.clone" | "bs.uninstall" |
@@ -664,19 +665,25 @@ async fn handle_request<R: Runtime>(
         "link-version-folder-action" | "relink-all-versions-folders"
     ) || (channel == "bs-installer.set-install-path" && args.get("move").and_then(Value::as_bool) == Some(true));
     let mut parallel_steam_download = false;
-    if app.config().identifier == "io.bsmanager.bsmanager.preview" && mutates_library {
+    let mut version_scan_writeback = version_scan;
+    if app.config().identifier == "io.bsmanager.bsmanager.preview" && (mutates_library || version_scan) {
         let legacy_running = windows_integration::legacy_manager_running().await?;
         parallel_steam_download = legacy_running
             && matches!(channel, "download-bs-version" | "auto-download-bs-version" | "download-bs-version-qr")
             && args.get("isVerification").and_then(Value::as_bool) != Some(true);
-        if legacy_running && !parallel_steam_download {
+        if legacy_running && mutates_library && !parallel_steam_download {
             return Err(serialized_error(
                 "Close legacy BSManager before changing shared game or content folders",
                 "LEGACY_MANAGER_RUNNING",
             ));
         }
+        // Version discovery also reconciles config.cfg and metadata.config. Keep it read-only while Electron owns the library.
+        if legacy_running && version_scan {
+            version_scan_writeback = false;
+        }
     }
-    let _operation_locks = if mutates_library {
+    let writes_library = mutates_library || version_scan_writeback;
+    let _operation_locks = if writes_library {
         let mut roots = vec![install_directory(app)
             .map_err(|error| serialized_error(error, "INSTALL_PATH_FAILED"))?];
         if channel == "bs-installer.set-install-path" {
@@ -939,11 +946,6 @@ async fn handle_request<R: Runtime>(
                 .map_err(|error| serialized_error(error, "SETTINGS_IMPORT_FAILED"))?;
             import_legacy_settings(app, true).map_err(|error| serialized_error(error, "SETTINGS_IMPORT_FAILED"))?;
             log::info!("Imported {} non-secret legacy renderer preferences", renderer_settings.len());
-            if let Some(custom_versions) = renderer_settings.get("custom-versions") {
-                let imported = versions::import_legacy_custom_versions(app, custom_versions)
-                    .map_err(|error| serialized_error(error.message, "SETTINGS_IMPORT_FAILED"))?;
-                log::info!("Imported {imported} legacy Beat Saber version colors");
-            }
             Ok(json!(renderer_settings))
         }
         "preview.complete-renderer-settings-import" => {
@@ -989,7 +991,7 @@ async fn handle_request<R: Runtime>(
             let _operation = app_state.library_operation.lock().await;
             let app = app.clone();
             tokio::task::spawn_blocking(move || {
-                let installed = versions::get_installed_versions(&app)?;
+                let installed = versions::get_installed_versions(&app, version_scan_writeback)?;
                 if let Err(error) = liv::sync(&app, &installed) {
                     log::warn!("Could not synchronize LIV shortcuts: {error}");
                 }

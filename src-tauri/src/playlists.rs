@@ -231,7 +231,7 @@ pub async fn one_click_install_playlist<R: Runtime>(
     cancelled: Arc<AtomicBool>,
 ) -> Result<Value, SerializedError> {
     let source = source.as_str().ok_or_else(|| serialized_error("Playlist source must be a string", "INVALID_SOURCE"))?;
-    let mut installed = versions::get_installed_versions(app)?.as_array().cloned().unwrap_or_default();
+    let mut installed = versions::get_installed_versions(app, false)?.as_array().cloned().unwrap_or_default();
     let target_version = installed.pop().unwrap_or(Value::Null);
     let (playlist, downloaded_maps) = download_playlist_content(
         app, window, response_channel, source, &target_version, &[], None, cancelled.clone(),

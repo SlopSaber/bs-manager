@@ -367,7 +367,7 @@ pub async fn one_click_install_map<R: Runtime>(
     map: &Value,
     cancelled: Arc<AtomicBool>,
 ) -> Result<Value, SerializedError> {
-    let mut installed = versions::get_installed_versions(app)?
+    let mut installed = versions::get_installed_versions(app, false)?
         .as_array().cloned().unwrap_or_default();
     let target_version = installed.pop();
     let downloaded = download_and_install_map(app, map, target_version.as_ref(), cancelled.clone()).await?;
@@ -849,7 +849,7 @@ fn map_folder<R: Runtime>(app: &AppHandle<R>, version: &Value) -> Result<PathBuf
 
 fn managed_map_roots<R: Runtime>(app: &AppHandle<R>) -> Result<Vec<PathBuf>, SerializedError> {
     let mut candidates = vec![linker::shared_folder(app)?.join(SHARED_MAPS_FOLDER).join(CUSTOM_LEVELS_FOLDER)];
-    let installed = versions::get_installed_versions(app)?;
+    let installed = versions::get_installed_versions(app, false)?;
     if let Some(versions) = installed.as_array() {
         for version in versions {
             candidates.push(map_folder(app, version)?);

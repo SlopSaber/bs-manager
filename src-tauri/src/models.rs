@@ -250,7 +250,7 @@ pub async fn one_click_install_model<R: Runtime>(
     model: &Value,
     cancelled: Arc<AtomicBool>,
 ) -> Result<Value, SerializedError> {
-    let mut installed = versions::get_installed_versions(app)?;
+    let mut installed = versions::get_installed_versions(app, false)?;
     let installed = installed.as_array_mut()
         .ok_or_else(|| serialized_error("Installed versions could not be read", "VERSION_SCAN_FAILED"))?;
     let version = installed.pop()

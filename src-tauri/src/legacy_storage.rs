@@ -24,7 +24,6 @@ const PREFERENCE_KEYS: &[&str] = &[
     "playlist-sort-order",
     "map-sort-order",
     "pinned-launch-mods",
-    "custom-versions",
     "launch-mods",
     "custom-launch-options",
     "launch-command",

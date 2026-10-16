@@ -228,7 +228,7 @@ async fn cleanup_import(path: &Path) {
     let _ = tokio::task::spawn_blocking(move || super::library::remove_library(&path)).await;
 }
 
-pub fn get_installed_versions<R: Runtime>(app: &AppHandle<R>) -> Result<Value, SerializedError> {
+pub fn get_installed_versions<R: Runtime>(app: &AppHandle<R>, write_back: bool) -> Result<Value, SerializedError> {
     let library_root = super::install_directory(app)
         .map_err(|error| serialized_error(error, "INSTALL_PATH_FAILED"))?;
     let version_root = library_root.join(INSTANCES_FOLDER);
@@ -289,7 +289,7 @@ pub fn get_installed_versions<R: Runtime>(app: &AppHandle<R>) -> Result<Value, S
         object.insert("steam".into(), json!(false));
         object.insert("oculus".into(), json!(false));
 
-        let metadata = read_or_create_metadata(&path);
+        let metadata = read_or_create_metadata(&path, write_back);
         object.insert("metadata".into(), metadata);
 
         if let Some(custom) = custom_versions.iter().find(|custom| {
@@ -305,52 +305,13 @@ pub fn get_installed_versions<R: Runtime>(app: &AppHandle<R>) -> Result<Value, S
     let colored_versions = installed.iter().filter(|version| {
         version.get("color").and_then(Value::as_str).is_some_and(|color| !color.is_empty())
     }).cloned().collect::<Vec<_>>();
-    config.insert(CUSTOM_VERSIONS_KEY.to_owned(), json!(colored_versions));
-    write_config(&config_path, &config)
-        .map_err(|error| serialized_error(error.to_string(), "VERSION_CONFIG_WRITE_FAILED"))?;
-
-    Ok(json!(installed))
-}
-
-pub fn import_legacy_custom_versions<R: Runtime>(app: &AppHandle<R>, serialized: &str) -> Result<usize, SerializedError> {
-    let imported = serde_json::from_str::<Vec<Value>>(serialized)
-        .map_err(|error| serialized_error(format!("Legacy version colors are invalid: {error}"), "SETTINGS_IMPORT_FAILED"))?;
-    let root = super::install_directory(app)
-        .map_err(|error| serialized_error(error, "INSTALL_PATH_FAILED"))?;
-    let config_path = root.join(LIBRARY_CONFIG_FILE);
-    let mut config = read_config(&config_path)
-        .map_err(|error| serialized_error(error.to_string(), "VERSION_CONFIG_READ_FAILED"))?;
-    let mut current = config.get(CUSTOM_VERSIONS_KEY).and_then(Value::as_array).cloned().unwrap_or_default();
-    let mut count = 0;
-
-    for legacy in imported {
-        let Some(version) = legacy.get("BSVersion").and_then(Value::as_str).filter(|value| !value.is_empty()) else { continue };
-        let Some(color) = legacy.get("color").and_then(Value::as_str).filter(|value| !value.is_empty()) else { continue };
-        let name = legacy.get("name").and_then(Value::as_str).filter(|value| !value.is_empty());
-        if let Some(existing) = current.iter_mut().find(|candidate| {
-            candidate.get("BSVersion").and_then(Value::as_str) == Some(version)
-                && candidate.get("name").and_then(Value::as_str) == name
-        }) {
-            if existing.get("color").and_then(Value::as_str).is_none_or(str::is_empty) {
-                if let Some(object) = existing.as_object_mut() {
-                    object.insert("color".to_owned(), json!(color));
-                    count += 1;
-                }
-            }
-            continue;
-        }
-        let mut record = json!({ "BSVersion": version, "color": color });
-        if let Some(name) = name {
-            record.as_object_mut().expect("version color object").insert("name".to_owned(), json!(name));
-        }
-        current.push(record);
-        count += 1;
+    if write_back {
+        config.insert(CUSTOM_VERSIONS_KEY.to_owned(), json!(colored_versions));
+        write_config(&config_path, &config)
+            .map_err(|error| serialized_error(error.to_string(), "VERSION_CONFIG_WRITE_FAILED"))?;
     }
 
-    config.insert(CUSTOM_VERSIONS_KEY.to_owned(), Value::Array(current));
-    write_config(&config_path, &config)
-        .map_err(|error| serialized_error(error.to_string(), "VERSION_CONFIG_WRITE_FAILED"))?;
-    Ok(count)
+    Ok(json!(installed))
 }
 
 pub async fn get_version_catalog<R: Runtime>(
@@ -698,7 +659,7 @@ fn write_config(path: &Path, config: &Map<String, Value>) -> io::Result<()> {
     fs::rename(temporary, path)
 }
 
-fn read_or_create_metadata(version_path: &Path) -> Value {
+fn read_or_create_metadata(version_path: &Path, persist: bool) -> Value {
     let metadata_path = version_path.join(VERSION_METADATA_FILE);
     let mut metadata = fs::read(&metadata_path).ok()
         .and_then(|contents| serde_json::from_slice::<Value>(&contents).ok())
@@ -706,10 +667,13 @@ fn read_or_create_metadata(version_path: &Path) -> Value {
         .unwrap_or_else(|| json!({}));
     let object = metadata.as_object_mut().expect("metadata object checked");
     if object.get("id").and_then(Value::as_str).is_none_or(str::is_empty) {
-        object.insert("id".into(), json!(Uuid::new_v4().to_string()));
+        let identity = version_path.to_string_lossy().to_lowercase();
+        object.insert("id".into(), json!(Uuid::new_v5(&Uuid::NAMESPACE_URL, identity.as_bytes()).to_string()));
         object.entry(String::from("store")).or_insert_with(|| json!("steam"));
-        if let Err(error) = fs::write(&metadata_path, serde_json::to_vec_pretty(&metadata).unwrap_or_default()) {
-            log::warn!("Unable to save version metadata {}: {error}", metadata_path.display());
+        if persist {
+            if let Err(error) = fs::write(&metadata_path, serde_json::to_vec_pretty(&metadata).unwrap_or_default()) {
+                log::warn!("Unable to save version metadata {}: {error}", metadata_path.display());
+            }
         }
     }
     metadata

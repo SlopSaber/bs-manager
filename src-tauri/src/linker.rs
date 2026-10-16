@@ -70,7 +70,7 @@ pub fn do_action<R: Runtime>(app: &AppHandle<R>, args: &Value) -> Result<Value, 
     match action {
         "link" => link_folder(app, &folder, intermediate.as_deref(), backup, options.keep_contents.unwrap_or(true))?,
         "unlink" => {
-            let versions = crate::versions::get_installed_versions(app)?;
+            let versions = crate::versions::get_installed_versions(app, false)?;
             let move_contents = !other_version_has_link(app, &versions, relative, &folder)?;
             unlink_folder(app, &folder, intermediate.as_deref(), backup, move_contents, options.keep_contents.unwrap_or(true))?;
         }
@@ -80,7 +80,7 @@ pub fn do_action<R: Runtime>(app: &AppHandle<R>, args: &Value) -> Result<Value, 
 }
 
 pub fn relink_all<R: Runtime>(app: &AppHandle<R>) -> Result<Value, SerializedError> {
-    let versions = crate::versions::get_installed_versions(app)?;
+    let versions = crate::versions::get_installed_versions(app, false)?;
     for version in versions.as_array().into_iter().flatten() {
         let args = json!({ "version": version, "options": { "relative": true, "ignoreSymlinkTargetError": true } });
         let linked = get_linked_folders(app, &args)?;
