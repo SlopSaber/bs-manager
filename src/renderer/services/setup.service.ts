@@ -6,6 +6,7 @@ import { InstallationLocationService } from "./installation-location.service";
 import { ConfigurationService } from "./configuration.service";
 import { IpcService } from "./ipc.service";
 import { ModalService } from "./modale.service";
+import { NotificationService } from "./notification.service";
 
 import { AskInstallPathModal } from "renderer/components/modal/modal-types/setup/ask-install-path.component";
 import { PreviewSettingsImportModal } from "renderer/components/modal/modal-types/setup/preview-settings-import-modal.component";
@@ -18,12 +19,14 @@ export class SetupService {
     private readonly installationLocationService: InstallationLocationService;
     private readonly ipcService: IpcService;
     private readonly modalService: ModalService;
+    private readonly notificationService: NotificationService;
     private readonly versionManagerService: BSVersionManagerService;
 
     private constructor() {
         this.installationLocationService = InstallationLocationService.getInstance();
         this.ipcService = IpcService.getInstance();
         this.modalService = ModalService.getInstance();
+        this.notificationService = NotificationService.getInstance();
         this.versionManagerService = BSVersionManagerService.getInstance();
     }
 
@@ -72,7 +75,15 @@ export class SetupService {
                 await lastValueFrom(this.ipcService.sendV2("preview.skip-legacy-settings-import"));
             }
         } catch (error) {
-            logRenderError(error);
+            logRenderError("Could not import legacy BSManager settings", error);
+            const message = typeof error === "object" && error !== null && "message" in error && typeof error.message === "string"
+                ? error.message
+                : String(error);
+            this.notificationService.notifyError({
+                title: "notifications.types.error",
+                desc: message,
+                duration: 12000,
+            });
         }
     }
 
