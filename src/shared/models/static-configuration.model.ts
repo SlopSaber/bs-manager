@@ -9,6 +9,7 @@ export interface StaticConfigKeyValues {
     "use-system-proxy": boolean;
     "close-bs-manager-on-launch": boolean;
     "last-version-launched": BSVersion;
+    "last-version-selected": BSVersion;
     "auto-update": AutoUpdate;
 
     // Linux-specific setting retained for the existing shared settings contract.

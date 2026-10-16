@@ -24,6 +24,8 @@ import { useService } from "renderer/hooks/use-service.hook";
 import { SetupService } from "renderer/services/setup.service";
 import { StaticConfigurationService } from "renderer/services/static-configuration.service";
 import { BSVersionManagerService } from "renderer/services/bs-version-manager.service";
+import type { BSVersion } from "shared/bs-version.interface";
+import { logRenderError } from "renderer";
 
 export default function App() {
 
@@ -49,17 +51,24 @@ export default function App() {
     }, []);
 
     const navigateToDefaultPage = async () => {
-        const version = await staticConfig.get("last-version-launched");
-        if (!version) {
+        const savedVersions = [
+            ["last-version-selected", await staticConfig.get("last-version-selected")],
+            ["last-version-launched", await staticConfig.get("last-version-launched")],
+        ] as const;
+
+        for (const [key, version] of savedVersions) {
+            if (!version) {
+                continue;
+            }
+
+            if (!await versionManager.isVersionInstalled(version)) {
+                await staticConfig.delete(key);
+                continue;
+            }
+
+            navigate(`/bs-version/${version.BSVersion}`, { state: version });
             return;
         }
-
-        if (!await versionManager.isVersionInstalled(version)) {
-            await staticConfig.delete("last-version-launched");
-            return;
-        }
-
-        navigate(`/bs-version/${version.BSVersion}`, { state: version });
     };
 
     const checkOneClicks = async () => {
@@ -111,6 +120,19 @@ export default function App() {
 
         el.scrollIntoView({ block: "start", behavior: "smooth" });
     }, [location]);
+
+    useEffect(() => {
+        if (!location.pathname.startsWith("/bs-version/")) {
+            return;
+        }
+
+        const version = location.state as BSVersion | null;
+        if (!version || typeof version.BSVersion !== "string" || !version.BSVersion) {
+            return;
+        }
+
+        void staticConfig.set("last-version-selected", version).catch(logRenderError);
+    }, [location.pathname, location.state]);
 
     return (
         <div className="relative w-screen h-screen overflow-hidden flex bg-light-main-color-1 dark:bg-main-color-1 z-0 max-w-full">
