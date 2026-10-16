@@ -35,7 +35,6 @@ import formatDuration from "format-duration";
 import { NpsIcon } from "renderer/components/svgs/icons/nps-icon.component";
 import { SpeedIcon } from "renderer/components/svgs/icons/speed-icon.component";
 import { formatBsrCode } from "shared/helpers/beat-saver.helpers";
-import { toTauriAssetUrl } from "renderer/helpers/tauri-asset.helpers";
 
 export type MapItemComponentProps<T = unknown> = {
     hash: string;
@@ -97,7 +96,7 @@ export function MapItemComponent <T = unknown>({ hash, title, autor, songAutor, 
         onHighlightedDiffsChange?.(_highlightedDiffs);
     }, [_highlightedDiffs])
 
-    const localSongUrl = toTauriAssetUrl(songUrl);
+    const localSongUrl = songUrl;
     const songPlaying = useObservable(() => audioPlayer.playing$.pipe(map(playing => playing && audioPlayer.src === localSongUrl)));
 
     const MAP_DIFFICULTIES = useConstant(() => Object.values(SongDiffName))
@@ -105,7 +104,7 @@ export function MapItemComponent <T = unknown>({ hash, title, autor, songAutor, 
     const mapUrl = mapId ? `https://beatsaver.com/maps/${mapId}` : null;
     const authorUrl = autorId ? `https://beatsaver.com/profile/${autorId}` : null;
     const likesText = likes ? Intl.NumberFormat(undefined, { notation: "compact" }).format(likes).split(" ").join("") : null;
-    const mapCoverUrl = toTauriAssetUrl(coverUrl) || `https://eu.cdn.beatsaver.com/${hash}.jpg`;
+    const mapCoverUrl = coverUrl || `https://eu.cdn.beatsaver.com/${hash}.jpg`;
 
     const createdDate = useConstant(() => {
         if(!createdAt){ return null; }

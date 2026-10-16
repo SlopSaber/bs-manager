@@ -68,7 +68,10 @@ pub async fn load_version_maps<R: Runtime>(
         let map = tokio::task::spawn_blocking(move || load_map_info_with_metadata(&folder, persist_metadata)).await
             .map_err(|error| serialized_error(error.to_string(), "MAP_LOAD_FAILED"))?;
         match map {
-            Ok(Some(map)) => {
+            Ok(Some(mut map)) => {
+                if let Err(error) = convert_local_map_asset_urls(window, &mut map) {
+                    log::warn!("Could not convert local Beat Saber map asset URLs: {error}");
+                }
                 maps.push(map);
                 emit_load_progress(window, response_channel, total, maps.len() as u64, &[])?;
             }
@@ -78,6 +81,23 @@ pub async fn load_version_maps<R: Runtime>(
     }
     emit_load_progress(window, response_channel, total, maps.len() as u64, &maps)?;
     Ok(Value::Null)
+}
+
+fn convert_local_map_asset_urls<R: Runtime>(window: &WebviewWindow<R>, map: &mut Value) -> Result<(), String> {
+    for key in ["coverUrl", "songUrl"] {
+        let asset_url = {
+            let Some(source) = map.get(key).and_then(Value::as_str) else { continue; };
+            let file_url = Url::parse(source).map_err(|error| error.to_string())?;
+            if file_url.scheme() != "file" { continue; }
+            let path = file_url.to_file_path().map_err(|_| format!("Could not decode local {key} path"))?;
+            window.convert_file_src(path, None).map_err(|error| error.to_string())?
+        };
+        let Some(object) = map.as_object_mut() else {
+            return Err("Local map details are not an object".to_owned());
+        };
+        object.insert(key.to_owned(), Value::String(asset_url));
+    }
+    Ok(())
 }
 
 pub async fn delete_maps<R: Runtime>(
