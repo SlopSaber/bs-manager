@@ -280,7 +280,7 @@ fn extract_external_zip(source: &Path, destination: &Path, cancelled: &AtomicBoo
         if !added.iter().any(|path| path.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("dll"))) {
             return Err(serialized_error("No DLL was found in the archive", "NO_MOD_DLL"));
         }
-        move_staged_files(&staging, destination, &added)?;
+        move_staged_files(&staging, destination, &added, cancelled)?;
         Ok(added.into_iter().map(|path| path.to_string_lossy().replace('\\', "/")).collect())
     })();
     let _ = fs::remove_dir_all(&staging);
@@ -312,10 +312,30 @@ async fn install_mods<R: Runtime>(
         let destination_for_install = destination.clone();
         let root_for_install = root.clone();
         let files_for_install = files.clone();
+        let cancelled_for_install = cancelled.clone();
         let install_result = tokio::task::spawn_blocking(move || {
-            if is_bsipa { clear_ipa_folder(&root_for_install)?; }
-            fs::create_dir_all(&destination_for_install).map_err(|error| serialized_error(error.to_string(), "MOD_INSTALL_FAILED"))?;
-            move_staged_files(&files_for_install.0, &destination_for_install, &files_for_install.1)
+            let ipa_backup = if is_bsipa { stage_ipa_contents(&root_for_install)? } else { None };
+            match move_staged_files(&files_for_install.0, &destination_for_install, &files_for_install.1, &cancelled_for_install) {
+                Ok(()) => {
+                    if let Some(backup) = ipa_backup {
+                        if let Err(error) = fs::remove_dir_all(&backup) {
+                            log::warn!("Could not remove temporary IPA backup {}: {error}", backup.display());
+                        }
+                    }
+                    Ok(())
+                }
+                Err(error) => {
+                    if let Some(backup) = ipa_backup {
+                        if let Err(restore_error) = restore_ipa_contents(&root_for_install, &backup) {
+                            return Err(serialized_error(
+                                format!("{}; previous IPA files remain in {}: {}", error.message, backup.display(), restore_error.message),
+                                "MOD_INSTALL_FAILED",
+                            ));
+                        }
+                    }
+                    Err(error)
+                }
+            }
         }).await.map_err(|error| serialized_error(error.to_string(), "MOD_INSTALL_FAILED"))?;
         if install_result.is_err() { let _ = tokio::fs::remove_dir_all(&files.0).await; }
         install_result?;
@@ -525,42 +545,239 @@ async fn execute_ipa(root: &Path, args: &[&str], cancelled: &AtomicBool) -> Resu
     }
 }
 
-fn clear_ipa_folder(root: &Path) -> Result<(), SerializedError> {
+fn stage_ipa_contents(root: &Path) -> Result<Option<PathBuf>, SerializedError> {
     let ipa = root.join("IPA");
-    let entries = match fs::read_dir(&ipa) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+    match fs::symlink_metadata(&ipa) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+            return Err(serialized_error("IPA path is not a regular folder", "INVALID_PATH"));
+        }
+        Ok(_) => {},
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(serialized_error(error.to_string(), "MOD_INSTALL_FAILED")),
-    };
-    for entry in entries {
-        let entry = entry.map_err(|error| serialized_error(error.to_string(), "MOD_INSTALL_FAILED"))?;
-        if matches!(entry.file_name().to_str(), Some("Backups" | "Pending")) { continue; }
-        let kind = entry.file_type().map_err(|error| serialized_error(error.to_string(), "MOD_INSTALL_FAILED"))?;
-        if kind.is_symlink() { return Err(serialized_error("IPA folder contains a symbolic link", "INVALID_PATH")); }
-        if kind.is_dir() { fs::remove_dir_all(entry.path()) } else { fs::remove_file(entry.path()) }
-            .map_err(|error| serialized_error(error.to_string(), "MOD_INSTALL_FAILED"))?;
+    }
+    let backup = root.join(format!(".bsmanager-ipa-backup-{}", uuid::Uuid::new_v4()));
+    fs::create_dir(&backup).map_err(|error| serialized_error(error.to_string(), "MOD_INSTALL_FAILED"))?;
+    let mut moved = Vec::new();
+    let result = (|| {
+        for entry in fs::read_dir(&ipa).map_err(|error| serialized_error(error.to_string(), "MOD_INSTALL_FAILED"))? {
+            let entry = entry.map_err(|error| serialized_error(error.to_string(), "MOD_INSTALL_FAILED"))?;
+            let name = entry.file_name();
+            if matches!(name.to_str(), Some("Backups" | "Pending")) { continue; }
+            let kind = entry.file_type().map_err(|error| serialized_error(error.to_string(), "MOD_INSTALL_FAILED"))?;
+            if kind.is_symlink() { return Err(serialized_error("IPA folder contains a symbolic link", "INVALID_PATH")); }
+            let staged = backup.join(&name);
+            fs::rename(entry.path(), &staged).map_err(|error| serialized_error(error.to_string(), "MOD_INSTALL_FAILED"))?;
+            moved.push(name);
+        }
+        Ok(())
+    })();
+    if let Err(error) = result {
+        if let Err(restore_error) = restore_ipa_entries(&ipa, &backup, &moved) {
+            return Err(serialized_error(
+                format!("{}; IPA files remain backed up in {}: {}", error.message, backup.display(), restore_error.message),
+                "MOD_INSTALL_FAILED",
+            ));
+        }
+        let _ = fs::remove_dir(&backup);
+        return Err(error);
+    }
+    if moved.is_empty() {
+        let _ = fs::remove_dir(&backup);
+        Ok(None)
+    } else {
+        Ok(Some(backup))
+    }
+}
+
+fn restore_ipa_contents(root: &Path, backup: &Path) -> Result<(), SerializedError> {
+    restore_ipa_entries(&root.join("IPA"), backup, &fs::read_dir(backup)
+        .map_err(|error| serialized_error(error.to_string(), "MOD_INSTALL_FAILED"))?
+        .map(|entry| entry.map(|entry| entry.file_name()).map_err(|error| serialized_error(error.to_string(), "MOD_INSTALL_FAILED")))
+        .collect::<Result<Vec<_>, _>>()?)?;
+    fs::remove_dir(backup).map_err(|error| serialized_error(error.to_string(), "MOD_INSTALL_FAILED"))
+}
+
+fn restore_ipa_entries(ipa: &Path, backup: &Path, names: &[std::ffi::OsString]) -> Result<(), SerializedError> {
+    fs::create_dir_all(ipa).map_err(|error| serialized_error(error.to_string(), "MOD_INSTALL_FAILED"))?;
+    for name in names.iter().rev() {
+        let staged = backup.join(name);
+        let target = ipa.join(name);
+        match fs::symlink_metadata(&target) {
+            Ok(_) => return Err(serialized_error(format!("Cannot restore IPA file over {}", target.display()), "MOD_INSTALL_FAILED")),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {},
+            Err(error) => return Err(serialized_error(error.to_string(), "MOD_INSTALL_FAILED")),
+        }
+        fs::rename(staged, target).map_err(|error| serialized_error(error.to_string(), "MOD_INSTALL_FAILED"))?;
     }
     Ok(())
 }
 
-fn move_staged_files(staging: &Path, destination: &Path, files: &[PathBuf]) -> Result<(), SerializedError> {
-    fs::create_dir_all(destination).map_err(|error| serialized_error(error.to_string(), "MOD_INSTALL_FAILED"))?;
-    for relative in files {
-        let relative = safe_relative_path(&relative.to_string_lossy())?;
-        let source = staging.join(&relative);
-        let target = destination.join(&relative);
-        if !source.is_file() { continue; }
-        fs::create_dir_all(target.parent().unwrap_or(destination))
-            .map_err(|error| serialized_error(error.to_string(), "MOD_INSTALL_FAILED"))?;
-        if target.exists() {
-            if target.is_dir() { fs::remove_dir_all(&target) } else { fs::remove_file(&target) }
-                .map_err(|error| serialized_error(error.to_string(), "MOD_INSTALL_FAILED"))?;
+struct ModFileSwap {
+    target: PathBuf,
+    backup: Option<PathBuf>,
+}
+
+fn move_staged_files(staging: &Path, destination: &Path, files: &[PathBuf], cancelled: &AtomicBool) -> Result<(), SerializedError> {
+    let mut changes = Vec::new();
+    let result = (|| {
+        ensure_mod_directory(destination)?;
+        for relative in files {
+            if cancelled.load(Ordering::Relaxed) {
+                return Err(serialized_error("Mod installation was cancelled", "REQUEST_CANCELLED"));
+            }
+            let relative = safe_relative_path(&relative.to_string_lossy())?;
+            let source = staging.join(&relative);
+            if !source.is_file() { continue; }
+            ensure_mod_parent(destination, &relative)?;
+            let target = destination.join(&relative);
+            let staged = target.with_file_name(format!(".bsmanager-stage-{}", uuid::Uuid::new_v4()));
+            let backup = target.with_file_name(format!(".bsmanager-backup-{}", uuid::Uuid::new_v4()));
+            let copy_result = (|| {
+                let mut input = File::open(&source).map_err(|error| serialized_error(error.to_string(), "MOD_INSTALL_FAILED"))?;
+                let mut output = fs::OpenOptions::new().write(true).create_new(true).open(&staged)
+                    .map_err(|error| serialized_error(error.to_string(), "MOD_INSTALL_FAILED"))?;
+                crate::archive_io::copy_cancellable(&mut input, &mut output, cancelled).map_err(|error| {
+                    if cancelled.load(Ordering::Relaxed) {
+                        serialized_error("Mod installation was cancelled", "REQUEST_CANCELLED")
+                    } else {
+                        serialized_error(error.to_string(), "MOD_INSTALL_FAILED")
+                    }
+                })?;
+                output.sync_all().map_err(|error| serialized_error(error.to_string(), "MOD_INSTALL_FAILED"))
+            })();
+            if let Err(error) = copy_result {
+                let _ = fs::remove_file(&staged);
+                return Err(error);
+            }
+            if cancelled.load(Ordering::Relaxed) {
+                let _ = fs::remove_file(&staged);
+                return Err(serialized_error("Mod installation was cancelled", "REQUEST_CANCELLED"));
+            }
+            let had_target = match fs::symlink_metadata(&target) {
+                Ok(metadata) if metadata.file_type().is_symlink() => {
+                    let _ = fs::remove_file(&staged);
+                    return Err(serialized_error("Mod destination contains a symbolic link", "INVALID_PATH"));
+                }
+                Ok(metadata) if metadata.is_dir() => {
+                    let _ = fs::remove_file(&staged);
+                    return Err(serialized_error("Mod destination is a folder", "INVALID_PATH"));
+                }
+                Ok(_) => true,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+                Err(error) => {
+                    let _ = fs::remove_file(&staged);
+                    return Err(serialized_error(error.to_string(), "MOD_INSTALL_FAILED"));
+                }
+            };
+            if had_target {
+                if let Err(error) = fs::rename(&target, &backup) {
+                    let _ = fs::remove_file(&staged);
+                    return Err(serialized_error(error.to_string(), "MOD_INSTALL_FAILED"));
+                }
+            }
+            if let Err(error) = fs::rename(&staged, &target) {
+                if had_target {
+                    if let Err(restore_error) = fs::rename(&backup, &target) {
+                        let _ = fs::remove_file(&staged);
+                        return Err(serialized_error(
+                            format!("{}; previous mod file remains backed up at {}: {}", error, backup.display(), restore_error),
+                            "MOD_INSTALL_FAILED",
+                        ));
+                    }
+                }
+                let _ = fs::remove_file(&staged);
+                return Err(serialized_error(error.to_string(), "MOD_INSTALL_FAILED"));
+            }
+            changes.push(ModFileSwap { target, backup: had_target.then_some(backup) });
         }
-        fs::rename(&source, &target).or_else(|_| fs::copy(&source, &target).map(|_| ()))
-            .map_err(|error| serialized_error(error.to_string(), "MOD_INSTALL_FAILED"))?;
+        if cancelled.load(Ordering::Relaxed) {
+            return Err(serialized_error("Mod installation was cancelled", "REQUEST_CANCELLED"));
+        }
+        Ok(())
+    })();
+
+    if let Err(error) = result {
+        if let Err(rollback_error) = rollback_mod_files(&changes) {
+            return Err(serialized_error(format!("{}; mod rollback was incomplete: {}", error.message, rollback_error), "MOD_INSTALL_FAILED"));
+        }
+        return Err(error);
+    }
+    for change in changes {
+        if let Some(backup) = change.backup {
+            if let Err(error) = remove_mod_path(&backup) {
+                log::warn!("Could not remove replaced mod backup {}: {error}", backup.display());
+            }
+        }
     }
     let _ = fs::remove_dir_all(staging);
     Ok(())
+}
+
+fn ensure_mod_directory(path: &Path) -> Result<(), SerializedError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+            Err(serialized_error("Mod destination is not a regular folder", "INVALID_PATH"))
+        }
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            fs::create_dir_all(path).map_err(|error| serialized_error(error.to_string(), "MOD_INSTALL_FAILED"))
+        }
+        Err(error) => Err(serialized_error(error.to_string(), "MOD_INSTALL_FAILED")),
+    }
+}
+
+fn ensure_mod_parent(destination: &Path, relative: &Path) -> Result<(), SerializedError> {
+    ensure_mod_directory(destination)?;
+    let mut parent = destination.to_path_buf();
+    if let Some(relative_parent) = relative.parent() {
+        for component in relative_parent.components() {
+            let Component::Normal(name) = component else { continue; };
+            parent.push(name);
+            match fs::symlink_metadata(&parent) {
+                Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+                    return Err(serialized_error("Mod destination contains a symbolic link or file", "INVALID_PATH"));
+                }
+                Ok(_) => {},
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    fs::create_dir(&parent).map_err(|error| serialized_error(error.to_string(), "MOD_INSTALL_FAILED"))?;
+                }
+                Err(error) => return Err(serialized_error(error.to_string(), "MOD_INSTALL_FAILED")),
+            }
+        }
+    }
+    Ok(())
+}
+
+fn rollback_mod_files(changes: &[ModFileSwap]) -> Result<(), String> {
+    let mut failures = Vec::new();
+    for change in changes.iter().rev() {
+        if let Err(error) = remove_mod_path(&change.target) {
+            if let Some(backup) = &change.backup {
+                failures.push(format!("could not remove {}; previous file remains at {}: {error}", change.target.display(), backup.display()));
+            } else {
+                failures.push(format!("could not remove {}: {error}", change.target.display()));
+            }
+            continue;
+        }
+        if let Some(backup) = &change.backup {
+            if let Err(error) = fs::rename(backup, &change.target) {
+                failures.push(format!("could not restore {} from {}: {error}", change.target.display(), backup.display()));
+            }
+        }
+    }
+    if failures.is_empty() { Ok(()) } else { Err(failures.join("; ")) }
+}
+
+fn remove_mod_path(path: &Path) -> io::Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Refusing to remove a non-file mod path",
+        )),
+        Ok(_) => fs::remove_file(path),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
 }
 
 fn safe_relative_path(value: &str) -> Result<PathBuf, SerializedError> {
