@@ -626,6 +626,10 @@ async fn handle_request<R: Runtime>(
     response_channel: Option<&str>,
     cancelled: Arc<AtomicBool>,
 ) -> Result<Value, SerializedError> {
+    if matches!(channel, "download-bs-version" | "auto-download-bs-version" | "download-bs-version-qr") {
+        // The Electron service stopped its current DepotDownloader before starting a replacement.
+        steam::stop_download(app);
+    }
     let mutates_library = matches!(channel,
         "import-version" | "download-bs-version" | "auto-download-bs-version" | "download-bs-version-qr" |
         "bs-oculus-download" | "bs-version.edit" | "bs-version.clone" | "bs.uninstall" |
