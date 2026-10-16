@@ -9,9 +9,10 @@ use simplelog::{CombinedLogger, Config, WriteLogger};
 const EXECUTABLE_NAME: &str = "Beat Saber.exe";
 const ENV_FILE_PREFIX: &str = "--bsmanager-env-file=";
 const MAX_ENVIRONMENT_FILE_SIZE: usize = 1024 * 1024;
-const AUTORIZED_ARGS: [&str; 8] = [
+const AUTORIZED_ARGS: [&str; 9] = [
     "fpfc",
     "-vrmode",
+    "None",
     "oculus",
     "--verbose",
     "--no-yeet",
