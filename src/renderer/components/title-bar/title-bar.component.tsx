@@ -16,6 +16,7 @@ import Tippy from "@tippyjs/react";
 import { StaticConfigurationService } from "renderer/services/static-configuration.service";
 import { AutoUpdate } from "shared/models/config";
 import type { UpdateInfo } from "shared/models/update-info.model";
+import { BsmLink } from "renderer/components/shared/bsm-link.component";
 
 function useVersion() {
     const ipcService = useService(IpcService);
@@ -135,6 +136,7 @@ export default function TitleBar({ template = "index.html" }: { template: AppWin
     const volume = useObservable(() => audio.volume$, audio.volume);
     const color = useThemeColor("first-color");
     const { currentVersion, isPreviewBuild, latestVersion } = useVersion();
+    const commitHash = currentVersion.match(/-([0-9a-f]{7,40})$/i)?.[1];
 
     const [maximized, setMaximized] = useState(false);
 
@@ -179,6 +181,16 @@ export default function TitleBar({ template = "index.html" }: { template: AppWin
                 <div id="drag-region" data-tauri-drag-region className="grow basis-0 h-full">
                     <div id="window-title" className="pl-1">
                         <span className="text-gray-800 dark:text-gray-100 font-bold text-xs italic">BSManager</span>
+                        {currentVersion && (commitHash ? (
+                            <BsmLink
+                                className="ml-1 text-[9px] text-gray-600 hover:underline dark:text-gray-300"
+                                href={`https://github.com/SlopSaber/bs-manager/commit/${commitHash}`}
+                            >
+                                v{currentVersion}
+                            </BsmLink>
+                        ) : (
+                            <span className="ml-1 text-[9px] text-gray-600 dark:text-gray-300">v{currentVersion}</span>
+                        ))}
                         <TitleBarTags version={currentVersion} isPreviewBuild={isPreviewBuild} latestVersion={latestVersion} />
                     </div>
                 </div>
