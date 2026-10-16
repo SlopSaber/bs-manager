@@ -6,6 +6,8 @@ This checklist distinguishes source coverage from verified behavior. Route entri
 
 Review each route's payload shape, result/error behavior, progress sequence, cancellation where applicable, and effects on the correct library/profile. One-way routes should be checked for their expected side effects and error logging.
 
+- [x] Static source inventory on 2026-10-16 found all 111 Windows routes from the shared IPC mapping and all 3 baseline `ipcMain.on` routes in the Rust dispatcher. Rust emits `window-arguments`; the renderer bridges native drops as `desktop-files-dropped`.
+
 ### Download and authentication
 
 - [ ] `import-version`
