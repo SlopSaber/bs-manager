@@ -1,7 +1,9 @@
 use std::{
     collections::{HashMap, HashSet},
+    fs::OpenOptions,
+    io::Write,
     path::{Path, PathBuf},
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use serde::Deserialize;
@@ -16,6 +18,7 @@ use crate::{
 
 const GAME_EXE: &str = "Beat Saber.exe";
 const STEAM_APP_ID: &str = "620980";
+const MAX_ADMIN_ENVIRONMENT_SIZE: usize = 1024 * 1024;
 const PROCESS_QUERY: &str = "[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false); $rows = @(Get-CimInstance Win32_Process -Filter \"Name = 'Beat Saber.exe'\" | ForEach-Object { [pscustomobject]@{ pid = $_.ProcessId; startedAt = $_.CreationDate.ToUniversalTime().ToString('o'); path = $_.ExecutablePath } }); ConvertTo-Json -InputObject $rows -Compress";
 
 #[derive(Deserialize)]
@@ -118,11 +121,16 @@ async fn launch_inner<R: Runtime>(
             .map_err(|error| serialized_error(error.to_string(), "LOG_PATH_FAILED"))?;
         let existing_processes = game_processes().await.ok().map(|processes| processes.into_iter().map(|process| process.pid).collect::<HashSet<_>>());
         let launched_after = Utc::now();
+        let environment_file = write_admin_environment_file(&environment)?;
         let mut helper_args = vec![game_executable.to_string_lossy().to_string()];
         helper_args.append(&mut launch_args);
+        helper_args.push(format!("--bsmanager-env-file={}", environment_file.to_string_lossy()));
         helper_args.push("--log-path".to_owned());
         helper_args.push(log_directory.join("bs-admin-start.log").to_string_lossy().to_string());
-        windows_integration::run_as_admin(&helper, &helper_args)?;
+        if let Err(error) = windows_integration::run_as_admin(&helper, &helper_args) {
+            let _ = std::fs::remove_file(environment_file);
+            return Err(error);
+        }
         if let Some(existing_processes) = existing_processes {
             if let Some(launched_game) = wait_for_new_game_process(&existing_processes, &game_executable, launched_after).await {
                 if should_close_manager_after_launch(app) {
@@ -175,6 +183,44 @@ async fn launch_inner<R: Runtime>(
     let mut child = child;
     child.wait().await.map_err(|error| serialized_error(error.to_string(), "EXIT"))?;
     Ok(Value::Null)
+}
+
+fn write_admin_environment_file(environment: &HashMap<String, String>) -> Result<PathBuf, SerializedError> {
+    let mut bytes = Vec::new();
+    let count = u32::try_from(environment.len())
+        .map_err(|error| serialized_error(error.to_string(), "ADMIN_ENVIRONMENT_FAILED"))?;
+    bytes.extend_from_slice(&count.to_le_bytes());
+    for (name, value) in environment {
+        let name = name.as_bytes();
+        let value = value.as_bytes();
+        let name_length = u32::try_from(name.len())
+            .map_err(|error| serialized_error(error.to_string(), "ADMIN_ENVIRONMENT_FAILED"))?;
+        let value_length = u32::try_from(value.len())
+            .map_err(|error| serialized_error(error.to_string(), "ADMIN_ENVIRONMENT_FAILED"))?;
+        bytes.extend_from_slice(&name_length.to_le_bytes());
+        bytes.extend_from_slice(&value_length.to_le_bytes());
+        bytes.extend_from_slice(name);
+        bytes.extend_from_slice(value);
+        if bytes.len() > MAX_ADMIN_ENVIRONMENT_SIZE {
+            return Err(serialized_error("Elevated launch environment exceeds the size limit", "ADMIN_ENVIRONMENT_FAILED"));
+        }
+    }
+
+    let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
+    for attempt in 0..16u8 {
+        let path = std::env::temp_dir().join(format!("bsmanager-admin-env-{}-{timestamp}-{attempt}.bin", std::process::id()));
+        let mut file = match OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(serialized_error(error.to_string(), "ADMIN_ENVIRONMENT_FAILED")),
+        };
+        if let Err(error) = file.write_all(&bytes).and_then(|_| file.sync_all()) {
+            let _ = std::fs::remove_file(&path);
+            return Err(serialized_error(error.to_string(), "ADMIN_ENVIRONMENT_FAILED"));
+        }
+        return Ok(path);
+    }
+    Err(serialized_error("Could not create a temporary elevated-launch environment file", "ADMIN_ENVIRONMENT_FAILED"))
 }
 
 async fn ensure_steam_running<R: Runtime>(window: &WebviewWindow<R>, response_channel: Option<&str>) {
