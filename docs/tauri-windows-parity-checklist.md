@@ -233,5 +233,5 @@ Linux Proton routes are intentionally outside this Windows-only rewrite: `linux.
 
 - [ ] Confirm preview and replacement NSIS install/uninstall, WebView2 bootstrapper, shortcuts, and elevation behavior.
 - [ ] Confirm replacement rollback backup paths and `migration.json` contents before relying on installer recovery.
-- [x] Verified delivered 2.0.0 artifacts against SHA-256 metadata: Preview `07d6bbd44c1b43094212b0f6636850f693f75a365abe65838bf6af613feff410` and Replacement `0811528e51201bcd8618730bb7358aef51a28c6db6a72819541bcfdc513815ba`; both are unsigned.
-- [x] Confirmed both 2.0.0 NSIS archives contain the Tauri host and Rust helpers; no Electron or Node runtime was found.
+- [x] Built local `2.0.0-7bedafcf` artifacts and recorded SHA-256: Preview `04DCAEFDE1081975C5B9A9FF2FB29CF7423E82597FEAFAC2EA25C11FA756D497` and Replacement `58C13B95EEA36E56B8C4506A82611697D1202603C7D7957B53C36391292D72F2`; both are unsigned.
+- [x] Confirmed both `2.0.0-7bedafcf` NSIS installers contain the Tauri host and Rust helpers; no Electron or Node runtime was found.
