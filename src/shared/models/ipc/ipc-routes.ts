@@ -6,8 +6,8 @@ import type { BsvMapDetail, SongDetails } from "shared/models/maps";
 import type { BsmLocalMap, BsmLocalMapsProgress, DeleteMapsProgress } from "shared/models/maps/bsm-local-map.interface";
 import type { BsvPlaylist, BsvPlaylistPage, PlaylistSearchParams, SearchParams } from "../maps/beat-saver.model";
 import type { ImportVersionOptions } from "../bs-version-import.model";
-import type { DownloadSteamInfo, OculusDownloadInfo } from "../bs-version-download/download-info.model";
-import type { DepotDownloaderEvent } from "../bs-version-download/depot-downloader.model";
+import type { OculusDownloadInfo } from "../bs-version-download/download-info.model";
+import type { SteamDownloadEvent, SteamDownloadRequest, SteamDownloadResponse } from "../bs-version-download/steam-download.model";
 import type { MSGetQuery, MSModel, MSModelType } from "../models/model-saber.model";
 import type { ModelDownload } from "../models/model-download.model";
 import type { BsmLocalModel } from "../models/bsm-local-model.interface";
@@ -29,11 +29,13 @@ export interface IpcChannelMapping {
 
     /* ** bs-download-ipcs ** */
     "import-version": { request: ImportVersionOptions, response: Progression<BSVersion>};
-    "auto-download-bs-version": { request: DownloadSteamInfo, response: DepotDownloaderEvent};
-    "download-bs-version": { request: DownloadSteamInfo, response: DepotDownloaderEvent};
-    "download-bs-version-qr": { request: DownloadSteamInfo, response: DepotDownloaderEvent};
-    "stop-download-bs-version": { request: void, response: void};
-    "send-input-bs-download": { request: string, response: boolean};
+    "bs-steam-download": { request: SteamDownloadRequest, response: SteamDownloadEvent };
+    "bs-steam-download-respond": { request: SteamDownloadResponse, response: boolean };
+    "bs-steam-stop-download": { request: void, response: void };
+    "steam-session-exists": { request: void, response: boolean };
+    "steam-session-username": { request: void, response: string | undefined };
+    "delete-steam-session": { request: void, response: void };
+    "import-legacy-steam-username": { request: string, response: void };
     "bs-oculus-download": { request: OculusDownloadInfo, response: Progression<BSVersion>};
     "bs-oculus-stop-download": { request: void, response: void};
     "login-with-meta": { request: boolean, response: string };
@@ -64,7 +66,7 @@ export interface IpcChannelMapping {
 
     /* ** bs-maps-ipcs ** */
     "load-version-maps": { request: BSVersion, response: BsmLocalMapsProgress};
-    "delete-maps": { request: BsmLocalMap[], response: DeleteMapsProgress };
+    "delete-maps": { request: Pick<BsmLocalMap, "path">[], response: DeleteMapsProgress };
     "export-maps": { request: { version: BSVersion; maps: BsmLocalMap[]; outPath: string }, response: Progression };
     "bs-maps.import-maps": { request: { paths: string[]; version: BSVersion | undefined }, response: Progression<BsmLocalMap> };
     "bs-maps.download-map": { request: { map: BsvMapDetail; version: BSVersion | undefined }, response: BsmLocalMap };
