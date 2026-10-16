@@ -184,7 +184,7 @@ Linux Proton routes are intentionally outside this Windows-only rewrite: `linux.
 - [ ] Default download store: Steam, Meta/Oculus, and ask each time.
 - [ ] Theme: dark, light, and operating-system preference.
 - [ ] First and second custom colors, including reset-to-default.
-- [ ] Preview import v2 restores legacy local preferences and custom version colors, preserves settings already changed in Preview, and refreshes the installed-version list.
+- [ ] Preview import v3 restores legacy local preferences, launch options, download-store selection, audio level, dismissal choices, and custom version colors; preserves settings already changed in Preview; and refreshes installed versions. Legacy encrypted Meta tokens prompt for login again.
 - [ ] Installation path edit, browse, validation, apply, and move existing installation.
 - [ ] Deep-link selection: all, Maps, Playlists plus `.bplist`, and Models; registration changes persist and uninstall restores only registrations still owned by profile.
 - [ ] Language selection and persistence.

@@ -40,7 +40,7 @@ const INSTALL_FOLDER: &str = "BSManager";
 const LEGACY_APP_DIRECTORY: &str = "bs-manager";
 const PREVIEW_IMPORT_MARKER: &str = "preview-legacy-settings-import";
 const PREVIEW_RENDERER_IMPORT_MARKER: &str = "preview-renderer-settings-import";
-const PREVIEW_RENDERER_IMPORT_VERSION: u64 = 2;
+const PREVIEW_RENDERER_IMPORT_VERSION: u64 = 3;
 const MAX_UPDATE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
 #[derive(Default)]
@@ -938,6 +938,7 @@ async fn handle_request<R: Runtime>(
                 .map_err(|error| serialized_error(format!("Legacy preference reader failed: {error}"), "SETTINGS_IMPORT_FAILED"))?
                 .map_err(|error| serialized_error(error, "SETTINGS_IMPORT_FAILED"))?;
             import_legacy_settings(app, true).map_err(|error| serialized_error(error, "SETTINGS_IMPORT_FAILED"))?;
+            log::info!("Imported {} non-secret legacy renderer preferences", renderer_settings.len());
             if let Some(custom_versions) = renderer_settings.get("custom-versions") {
                 let imported = versions::import_legacy_custom_versions(app, custom_versions)
                     .map_err(|error| serialized_error(error.message, "SETTINGS_IMPORT_FAILED"))?;

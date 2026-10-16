@@ -12,6 +12,8 @@ use uuid::Uuid;
 
 const ELECTRON_FILE_ORIGIN_PREFIX: &[u8] = b"_file://\0";
 const PREFERENCE_KEYS: &[&str] = &[
+    // Renderer preferences from the Electron baseline. Keep this explicit so
+    // unrelated localStorage values and legacy credentials are not imported.
     "first-color",
     "second-color",
     "theme",
@@ -23,7 +25,21 @@ const PREFERENCE_KEYS: &[&str] = &[
     "map-sort-order",
     "pinned-launch-mods",
     "custom-versions",
+    "launch-mods",
+    "custom-launch-options",
+    "launch-command",
+    "selectedStoreToDownload",
+    "audio-level",
     "not-remind-oneclick",
+    "not-remind-mods-models",
+    "not-show-bs-version-outdated-modal",
+    "not-show-bs-version-outdated-notification",
+    "not-show-outdated-mods-notification",
+    "not-confirm-delete-map",
+    "not-confirm-delete-model",
+    "dont-remind-admin",
+    "dont-remind-vr-runtime",
+    "accepted-mods-disclaimer",
     "STEAM-USERNAME",
 ];
 
