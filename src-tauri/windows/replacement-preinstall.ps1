@@ -98,6 +98,48 @@ function Test-RegistryValueExists([string] $hiveName, [string] $relativeKey, [st
     }
 }
 
+function Get-UserRegistryCommand([string] $relativeKey) {
+    $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($relativeKey)
+    if ($null -eq $key) { return $null }
+    try { return [string] $key.GetValue("") }
+    finally { $key.Dispose() }
+}
+
+function Test-CommandUsesExecutable([string] $command, [string] $executable) {
+    return (
+        -not [string]::IsNullOrWhiteSpace($command) -and
+        $command.IndexOf($executable, [StringComparison]::OrdinalIgnoreCase) -ge 0 -and
+        $command.Contains("%1")
+    )
+}
+
+function Get-LegacyRegisteredProtocols([string] $executable) {
+    $protocols = @("bsmanager", "beatsaver", "web+bsmap", "bsplaylist", "modelsaber")
+    $registered = @()
+    foreach ($protocol in $protocols) {
+        $command = Get-UserRegistryCommand "Software\Classes\$protocol\shell\open\command"
+        if (Test-CommandUsesExecutable $command $executable) {
+            $registered += $protocol
+        }
+    }
+    return $registered
+}
+
+function Get-LegacyBplistProgId([string] $executable) {
+    $extension = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey("Software\Classes\.bplist")
+    if ($null -eq $extension) { return $null }
+    try { $progId = [string] $extension.GetValue("") }
+    finally { $extension.Dispose() }
+    if ([string]::IsNullOrWhiteSpace($progId) -or $progId.Contains("\") -or $progId.Contains("/")) {
+        return $null
+    }
+    $command = Get-UserRegistryCommand "Software\Classes\$progId\shell\open\command"
+    if (Test-CommandUsesExecutable $command $executable) {
+        return $progId
+    }
+    return $null
+}
+
 function Restore-RegistryBackups([object[]] $backupRecords) {
     foreach ($backup in $backupRecords) {
         if (-not (Test-Path -LiteralPath $backup.File -PathType Leaf)) { continue }
@@ -158,6 +200,8 @@ try {
             }
         }
     }
+    $legacyRegisteredProtocols = @(Get-LegacyRegisteredProtocols $legacy.Executable)
+    $legacyBplistProgId = Get-LegacyBplistProgId $legacy.Executable
 
     $extensionRoots = @(
         [pscustomobject]@{ Hive = "HKCU"; Root = [Microsoft.Win32.Registry]::CurrentUser },
@@ -185,6 +229,8 @@ try {
         uninstaller = $legacy.Uninstaller
         registryHive = $legacy.RegistryHive
         registryKey = $legacy.RegistryKey
+        legacyRegisteredProtocols = $legacyRegisteredProtocols
+        legacyBplistProgId = $legacyBplistProgId
         settingsPath = $settingsPath
         settingsBackup = $settingsBackup
         registryBackups = @($registryBackups | ForEach-Object {

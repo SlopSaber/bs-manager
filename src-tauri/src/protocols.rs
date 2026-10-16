@@ -4,12 +4,111 @@ use std::{
     process::Command,
 };
 
+use serde_json::Value;
 use tauri::{AppHandle, Manager, Runtime};
 use tauri_plugin_deep_link::DeepLinkExt;
 use winreg::{RegKey, enums::{HKEY_CURRENT_USER, KEY_READ}};
 
 const BPLIST_EXTENSION: &str = ".bplist";
 const BPLIST_PROG_ID: &str = "BSManager.BeatSaberPlaylist";
+
+pub fn migrate_legacy_registered_handlers<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    if app.config().identifier != "io.bsmanager.bsmanager" {
+        return Ok(());
+    }
+
+    let backup_root = app.path().local_data_dir().map_err(|error| error.to_string())?
+        .join("BSManager")
+        .join("migration-backups");
+    let mut backups = match fs::read_dir(&backup_root) {
+        Ok(entries) => entries
+            .map(|entry| entry.map(|entry| entry.path()).map_err(|error| error.to_string()))
+            .collect::<Result<Vec<_>, _>>()?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.to_string()),
+    };
+    backups.retain(|directory| directory.is_dir() && directory.join("migration.json").is_file());
+    backups.sort_by_key(|directory| directory.file_name().map(|name| name.to_os_string()));
+    let Some(latest_backup) = backups.pop() else { return Ok(()); };
+
+    let migration_path = latest_backup.join("migration.json");
+    let contents = fs::read_to_string(&migration_path).map_err(|error| error.to_string())?;
+    let contents = contents.trim_start_matches('\u{feff}');
+    let migration: Value = serde_json::from_str(contents).map_err(|error| error.to_string())?;
+    let Some(registered_protocols) = migration.get("legacyRegisteredProtocols").and_then(Value::as_array) else {
+        return Ok(());
+    };
+    let Some(legacy_executable) = migration.get("legacyExecutable").and_then(Value::as_str) else {
+        return Ok(());
+    };
+
+    let completed_marker = latest_backup.join("protocols-migrated");
+    if completed_marker.is_file() {
+        return Ok(());
+    }
+
+    for protocol in registered_protocols.iter().filter_map(Value::as_str) {
+        if matches!(protocol, "bsmanager" | "beatsaver" | "web+bsmap" | "bsplaylist" | "modelsaber") {
+            migrate_protocol(app, protocol, legacy_executable)?;
+        }
+    }
+
+    if let Some(legacy_prog_id) = migration.get("legacyBplistProgId").and_then(Value::as_str) {
+        migrate_bplist_association(app, legacy_prog_id, legacy_executable)?;
+    }
+
+    fs::write(completed_marker, b"migrated\n").map_err(|error| error.to_string())
+}
+
+fn migrate_protocol<R: Runtime>(app: &AppHandle<R>, protocol: &str, legacy_executable: &str) -> Result<(), String> {
+    let current = current_executable()?;
+    match registry_command(protocol)? {
+        Some(command) if command_matches(&command, &current) => return set(app, protocol, true),
+        Some(command) if command_uses_executable(&command, legacy_executable) => {
+            delete_current_user_class_key(&format!("Software\\Classes\\{protocol}"))?;
+        }
+        Some(_) => return Ok(()),
+        None => {}
+    }
+    set(app, protocol, true)
+}
+
+fn migrate_bplist_association<R: Runtime>(app: &AppHandle<R>, legacy_prog_id: &str, legacy_executable: &str) -> Result<(), String> {
+    if legacy_prog_id.is_empty() || legacy_prog_id.contains('\\') || legacy_prog_id.contains('/') {
+        return Ok(());
+    }
+
+    let current = current_executable()?;
+    let current_prog_id = class_default_value(BPLIST_EXTENSION)?;
+    if let Some(prog_id) = current_prog_id.as_deref() {
+        let current_command = class_command(prog_id)?;
+        if current_command.as_deref().is_some_and(|command| command_matches(command, &current)) {
+            return set_bplist_association(app, true);
+        }
+        let legacy_owner_matches = prog_id.eq_ignore_ascii_case(legacy_prog_id)
+            && current_command.as_deref().is_none_or(|command| command_uses_executable(command, legacy_executable));
+        if !legacy_owner_matches {
+            return Ok(());
+        }
+        delete_current_user_class_key(&format!("Software\\Classes\\{prog_id}"))?;
+    }
+
+    delete_current_user_class_key("Software\\Classes\\.bplist")?;
+    set_bplist_association(app, true)
+}
+
+fn command_uses_executable(command: &str, executable: &str) -> bool {
+    command.to_ascii_lowercase().contains(&executable.to_ascii_lowercase()) && command.contains("%1")
+}
+
+fn delete_current_user_class_key(key_path: &str) -> Result<(), String> {
+    let user = RegKey::predef(HKEY_CURRENT_USER);
+    match user.delete_subkey_all(key_path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.raw_os_error() == Some(2) => Ok(()),
+        Err(error) => Err(error.to_string()),
+    }
+}
 
 pub fn set<R: Runtime>(app: &AppHandle<R>, protocol: &str, enabled: bool) -> Result<(), String> {
     if enabled {

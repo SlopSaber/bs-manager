@@ -1666,6 +1666,9 @@ pub fn run() {
             if let Err(error) = proxy::configure(app.handle()) {
                 log::warn!("Could not read the system proxy setting: {error}");
             }
+            if let Err(error) = protocols::migrate_legacy_registered_handlers(app.handle()) {
+                log::warn!("Could not migrate legacy Windows protocol registrations: {error}");
+            }
             let launch_protocol = shortcuts::launch_protocol(app.handle());
             match protocols::is_registered(app.handle(), launch_protocol) {
                 Ok(true) => {}
