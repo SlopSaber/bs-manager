@@ -35,6 +35,7 @@ import formatDuration from "format-duration";
 import { NpsIcon } from "renderer/components/svgs/icons/nps-icon.component";
 import { SpeedIcon } from "renderer/components/svgs/icons/speed-icon.component";
 import { formatBsrCode } from "shared/helpers/beat-saver.helpers";
+import { toTauriAssetUrl } from "renderer/helpers/tauri-asset.helpers";
 
 export type MapItemComponentProps<T = unknown> = {
     hash: string;
@@ -96,14 +97,15 @@ export function MapItemComponent <T = unknown>({ hash, title, autor, songAutor, 
         onHighlightedDiffsChange?.(_highlightedDiffs);
     }, [_highlightedDiffs])
 
-    const songPlaying = useObservable(() => audioPlayer.playing$.pipe(map(playing => playing && audioPlayer.src === songUrl)));
+    const localSongUrl = toTauriAssetUrl(songUrl);
+    const songPlaying = useObservable(() => audioPlayer.playing$.pipe(map(playing => playing && audioPlayer.src === localSongUrl)));
 
     const MAP_DIFFICULTIES = useConstant(() => Object.values(SongDiffName))
     const previewUrl = mapId ? `https://allpoland.github.io/ArcViewer/?id=${mapId}` : null;
     const mapUrl = mapId ? `https://beatsaver.com/maps/${mapId}` : null;
     const authorUrl = autorId ? `https://beatsaver.com/profile/${autorId}` : null;
     const likesText = likes ? Intl.NumberFormat(undefined, { notation: "compact" }).format(likes).split(" ").join("") : null;
-    const mapCoverUrl = coverUrl || `https://eu.cdn.beatsaver.com/${hash}.jpg`;
+    const mapCoverUrl = toTauriAssetUrl(coverUrl) || `https://eu.cdn.beatsaver.com/${hash}.jpg`;
 
     const createdDate = useConstant(() => {
         if(!createdAt){ return null; }
@@ -137,10 +139,10 @@ export function MapItemComponent <T = unknown>({ hash, title, autor, songAutor, 
         if (songPlaying) {
             return audioPlayer.pause();
         }
-        if (!audioPlayer.playing && audioPlayer.src === songUrl) {
+        if (!audioPlayer.playing && audioPlayer.src === localSongUrl) {
             return audioPlayer.resume();
         }
-        audioPlayer.play([{ src: songUrl, bpm: bpm ?? 1 }]);
+        audioPlayer.play([{ src: localSongUrl, bpm: bpm ?? 1 }]);
     };
 
     const bottomBarHoverStart = () => {

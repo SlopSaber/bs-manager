@@ -10,7 +10,7 @@ use chrono::Local;
 use futures_util::StreamExt;
 use serde_json::{Map, Value, json};
 use sha1::{Digest, Sha1};
-use tauri::{AppHandle, Runtime, WebviewWindow};
+use tauri::{AppHandle, Manager, Runtime, WebviewWindow};
 use tokio::io::AsyncWriteExt;
 use url::Url;
 use zip::{CompressionMethod, ZipArchive, write::{SimpleFileOptions, ZipWriter}};
@@ -33,6 +33,17 @@ pub async fn load_version_maps<R: Runtime>(
 ) -> Result<Value, SerializedError> {
     let _ = tokio::time::timeout(Duration::from_secs(30), crate::song_cache::initialize(app)).await;
     let root = map_folder(app, version)?;
+    if root.is_dir() {
+        let mut scoped_roots = vec![root.clone()];
+        if let Ok(canonical_root) = fs::canonicalize(&root) {
+            if canonical_root != root { scoped_roots.push(canonical_root); }
+        }
+        for scoped_root in scoped_roots {
+            if let Err(error) = app.asset_protocol_scope().allow_directory(&scoped_root, true) {
+                log::warn!("Could not expose local map assets from {}: {error}", scoped_root.display());
+            }
+        }
+    }
     let mut folders = Vec::new();
     match tokio::fs::read_dir(&root).await {
         Ok(mut entries) => {
