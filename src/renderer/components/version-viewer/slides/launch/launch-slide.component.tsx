@@ -80,14 +80,12 @@ function useCustomLaunchMods({
         configService.watch<CustomLaunchOption[]>("custom-launch-options")
     ), []);
 
-    const [customLaunchModsArgs, setCustomLaunchModsArgs] = useState<string[]>([]);
-
-    useEffect(() => {
-        const command = customLaunchOptions
-            ?.map(option => option.data.command || "")
-            .filter(Boolean);
-        setCustomLaunchModsArgs(() => command ?? []);
-    }, [customLaunchOptions]);
+    const customLaunchModsArgs = useMemo(() => (
+        (customLaunchOptions ?? [])
+            .filter(option => activeLaunchMods.includes(option.id))
+            .map(option => option.data.command || "")
+            .filter(Boolean)
+    ), [customLaunchOptions, activeLaunchMods]);
 
     const deleteCustomLaunchOption = useCallback((id: string) => {
         const newCustomLaunchOptions = (customLaunchOptions ?? []).filter(mode => mode.id !== id);
@@ -108,15 +106,7 @@ function useCustomLaunchMods({
             label: option.label,
             active: activeLaunchMods.includes(option.id),
             pinned: pinnedLaunchMods.includes(option.id),
-            onChange: (checked) => {
-                toggleActiveLaunchMod(checked, option.id)
-                setCustomLaunchModsArgs(prev => {
-                    if(checked){
-                        return [...prev, option.data.command];
-                    }
-                    return prev.filter(arg => arg !== option.data.command);
-                });
-            },
+            onChange: (checked) => toggleActiveLaunchMod(checked, option.id),
             onPinChange: (pinned) => togglePinnedLaunchMod(pinned, option.id),
             onEdit: () => {
                 saveCustomLaunchOption(option);
