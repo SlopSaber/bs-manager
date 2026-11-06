@@ -719,6 +719,7 @@
                     "EPERM": "BSManager non ha i permessi necessari per condividere la cartella.",
                     "EACCES": "BSManager non ha i permessi necessari per condividere la cartella.",
                     "ENOSPC": "Il disco è pieno, libera un pò di spazio e riprova.",
+                    "EBUSY": "Un file in questa cartella è in uso da un altro programma. Chiudilo e riprova.",
                     "LinkingNotSupported": "Il collegamento delle cartelle non è supportato su questo file system.",
                     "UNKNOWN_ERROR": "C'è stato un errore sconosciuto durante la condivisione della cartella."
                 }

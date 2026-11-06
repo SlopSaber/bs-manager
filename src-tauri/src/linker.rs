@@ -129,6 +129,9 @@ fn other_version_has_link<R: Runtime>(app: &AppHandle<R>, versions: &Value, rela
 
 fn link_folder<R: Runtime>(app: &AppHandle<R>, folder: &Path, intermediate: Option<&str>, backup: bool, keep_contents: bool) -> Result<(), SerializedError> {
     let shared = shared_folder_path(app, folder, intermediate)?;
+    if !is_link(folder) && path_exists(folder) {
+        ensure_folder_not_in_use(folder)?;
+    }
     fs::create_dir_all(&shared).map_err(|error| link_error(error, "LINK_FAILED"))?;
 
     if is_link(folder) {
@@ -463,6 +466,64 @@ fn same_path(left: &Path, right: &Path) -> bool {
     })
 }
 
-fn link_error(error: impl std::fmt::Display, code: &str) -> SerializedError {
-    serialized_error(error.to_string(), code)
+/// Fails when a file in `folder` is held open without delete sharing, because the
+/// folder must be copied, removed and replaced by a link without partial progress.
+fn ensure_folder_not_in_use(folder: &Path) -> Result<(), SerializedError> {
+    match locked_file(folder) {
+        Ok(None) => Ok(()),
+        Ok(Some(path)) => Err(serialized_error(
+            format!("{} is being used by another process", path.display()),
+            "EBUSY",
+        )),
+        Err(error) => Err(link_error(error, "LINK_FAILED")),
+    }
+}
+
+#[cfg(windows)]
+fn locked_file(path: &Path) -> io::Result<Option<PathBuf>> {
+    use std::os::windows::fs::OpenOptionsExt;
+    const DELETE: u32 = 0x0001_0000;
+    const SHARE_ALL: u32 = 0x1 | 0x2 | 0x4;
+
+    if is_link(path) {
+        return Ok(None);
+    }
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.is_dir() {
+        for entry in fs::read_dir(path)? {
+            if let Some(locked) = locked_file(&entry?.path())? {
+                return Ok(Some(locked));
+            }
+        }
+        return Ok(None);
+    }
+    match fs::OpenOptions::new().access_mode(DELETE).share_mode(SHARE_ALL).open(path) {
+        Ok(_) => Ok(None),
+        Err(error) if is_sharing_violation(&error) => Ok(Some(path.to_path_buf())),
+        Err(_) => Ok(None),
+    }
+}
+
+#[cfg(not(windows))]
+fn locked_file(_path: &Path) -> io::Result<Option<PathBuf>> {
+    Ok(None)
+}
+
+fn is_sharing_violation(error: &io::Error) -> bool {
+    matches!(error.raw_os_error(), Some(32 | 33))
+}
+
+fn link_error(error: impl std::fmt::Display + 'static, code: &str) -> SerializedError {
+    let message = error.to_string();
+    let any = &error as &dyn std::any::Any;
+    let os_code = any.downcast_ref::<io::Error>().and_then(io::Error::raw_os_error);
+    let code = match os_code {
+        Some(32 | 33) => "EBUSY",
+        Some(112 | 39) => "ENOSPC",
+        Some(5) => "EACCES",
+        Some(1314) => "EPERM",
+        Some(1 | 50) if code == "LINKING_NOT_SUPPORTED" => "LinkingNotSupported",
+        _ => code,
+    };
+    serialized_error(message, code)
 }

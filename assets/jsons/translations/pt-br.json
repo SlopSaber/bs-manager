@@ -719,6 +719,7 @@
                     "EPERM": "BSManager não tem as permissões necessárias para abrir a pasta.",
                     "EACCES": "BSManager não tem as permissões necessárias para linkagem da pasta.",
                     "ENOSPC": "O disco está cheio, abra algum espaço e tente novamente",
+                    "EBUSY": "Um arquivo desta pasta está sendo usado por outro programa. Feche-o e tente novamente.",
                     "LinkingNotSupported": "Linkagem de pastas não é suportada nesse sistema de arquivos.",
                     "UNKNOWN_ERROR": "Um erro desconhecido aconteceu durante a linkagem de arquivos."
                 }

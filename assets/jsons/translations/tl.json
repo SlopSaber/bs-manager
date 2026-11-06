@@ -719,6 +719,7 @@
                     "EPERM": "Walang permiso ang BSManager upang i-link ang folder.",
                     "EACCES": "Walang permiso ang BSManager upang i-link ang folder.",
                     "ENOSPC": "Puno na ang disk, magtanggal ng ilang files at subukang muli.",
+                    "EBUSY": "May file sa folder na ito na ginagamit ng ibang program. Isara ito at subukang muli.",
                     "LinkingNotSupported": "Hindi sinusuportahan ang folder linking sa file system na ito.",
                     "UNKNOWN_ERROR": "May error na nangyari habang nili-link ang folder."
                 }
