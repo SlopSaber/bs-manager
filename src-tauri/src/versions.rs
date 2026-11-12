@@ -372,6 +372,7 @@ pub async fn get_version_catalog<R: Runtime>(
 
     match remote {
         Ok(catalog) => {
+            let catalog = if catalog_release_date(&cached) > catalog_release_date(&catalog) { cached } else { catalog };
             if let Err(error) = write_version_catalog_cache(app, &catalog) {
                 log::warn!("Could not cache the upstream Beat Saber version catalog: {}", error.message);
             }
